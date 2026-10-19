@@ -6,6 +6,8 @@
 #   precompact-manual     PreCompact (manual): if no handoff, block once; running /compact again within 2 min forces it
 #   sessionstart-compact  SessionStart (compact): feed the handoff back in, then archive it
 #   sessionstart-startup  SessionStart (startup): mention the latest handoff from an earlier session in this project
+#   status                Run by the /context-manager-skill:status skill (not a hook): prints a status report.
+#                         Takes -SessionId, -ProjectDir and -DataDir instead of reading hook input.
 #
 # Settings, highest priority first:
 #   <project>/.claude/context-manager.json     project level (commit it to share with the repo)
@@ -13,7 +15,12 @@
 #   plugin options (/plugin > Configure options), exported as CLAUDE_PLUGIN_OPTION_<KEY>
 #   built-in defaults below
 
-param([string]$Mode = 'prompt')
+param(
+    [string]$Mode = 'prompt',
+    [string]$SessionId,
+    [string]$ProjectDir,
+    [string]$DataDir
+)
 
 $ErrorActionPreference = 'Stop'
 $Marker = '<!-- handoff-complete -->'
@@ -155,9 +162,150 @@ function Get-ContextTokens([string]$path) {
 
 function Block([string]$reason) { Write-Json @{ decision = 'block'; reason = $reason }; exit 0 }
 
+# ---------- heartbeat (lets /status prove the hooks are firing) ----------
+
+function Get-DataDir {
+    if ($DataDir -and -not $DataDir.Contains('${')) { return $DataDir }
+    if ($env:CLAUDE_PLUGIN_DATA) { return $env:CLAUDE_PLUGIN_DATA }
+    return (Join-Path ([IO.Path]::GetTempPath()) 'context-manager-skill')
+}
+
+function Write-Heartbeat($hookInput, $ctx, [bool]$enabled) {
+    try {
+        $dir = Get-DataDir
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $beat = @{
+            time            = (Get-Date).ToString('o')
+            session_id      = $hookInput.session_id
+            transcript_path = $hookInput.transcript_path
+            context_tokens  = $ctx
+            enabled         = $enabled
+        }
+        [IO.File]::WriteAllText((Join-Path $dir ("heartbeat-" + $hookInput.session_id + ".json")), ($beat | ConvertTo-Json -Compress))
+        $cutoff = (Get-Date).AddDays(-7)
+        Get-ChildItem -LiteralPath $dir -Filter 'heartbeat-*.json' -File |
+            Where-Object { $_.LastWriteTime -lt $cutoff } | Remove-Item -Force -ErrorAction SilentlyContinue
+    } catch { [Console]::Error.WriteLine("context-manager heartbeat: " + $_.Exception.Message) }
+}
+
+# ---------- status report ----------
+
+function Format-Age([double]$seconds) {
+    if ($seconds -lt 90) { return "$([int]$seconds)s ago" }
+    if ($seconds -lt 5400) { return "$([int]($seconds / 60)) min ago" }
+    if ($seconds -lt 172800) { return "$([int]($seconds / 3600)) h ago" }
+    return "$([int]($seconds / 86400)) days ago"
+}
+
+function Format-Value($v) {
+    if ($v -is [bool]) { return "$v".ToLowerInvariant() }
+    if ($v -is [int] -or $v -is [int64]) { return (Format-K $v) }
+    return "$v"
+}
+
+function Show-Status {
+    $sid = $SessionId
+    if (-not $sid -or $sid.Contains('${')) { $sid = $null }
+    $proj = $ProjectDir
+    if (-not $proj -or $proj.Contains('${')) { $proj = $env:CLAUDE_PROJECT_DIR }
+    if (-not $proj) { $proj = (Get-Location).Path }
+
+    $cfg = Get-Settings $proj
+    $homeDir = $env:USERPROFILE
+    if (-not $homeDir) { $homeDir = $HOME }
+
+    $version = '?'
+    $manifest = Read-JsonFile (Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) '.claude-plugin') 'plugin.json')
+    if ($manifest -and $manifest.version) { $version = $manifest.version }
+
+    # Hooks: proven active if the prompt hook left a heartbeat for this session
+    $beat = $null
+    if ($sid) { $beat = Read-JsonFile (Join-Path (Get-DataDir) ("heartbeat-" + $sid + ".json")) }
+    if (-not $cfg.enabled) {
+        $hooks = "Off: disabled for this project (``enabled`` is false in the $($cfg._src['enabled']))"
+    } elseif ($beat) {
+        $age = ((Get-Date) - [DateTime]::Parse($beat.time)).TotalSeconds
+        $hooks = "Active: hooks ran $(Format-Age $age) in this session"
+    } else {
+        $hooks = "Not confirmed: installed, but its hooks haven't run in this session. Check ``/hooks`` for errors, or restart Claude if you just installed it"
+    }
+
+    # Context size from this session's transcript
+    $transcript = $null
+    if ($beat -and $beat.transcript_path) { $transcript = $beat.transcript_path }
+    if ((-not $transcript -or -not (Test-Path -LiteralPath $transcript)) -and $sid) {
+        $projectsDir = Join-Path (Join-Path $homeDir '.claude') 'projects'
+        if (Test-Path -LiteralPath $projectsDir) {
+            $hit = Get-ChildItem -LiteralPath $projectsDir -Directory -ErrorAction SilentlyContinue |
+                   ForEach-Object { Join-Path $_.FullName ($sid + '.jsonl') } |
+                   Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if ($hit) { $transcript = $hit }
+        }
+    }
+    $ctx = Get-ContextTokens $transcript
+
+    # Handoff state and what happens next
+    $handoffDir = Get-HandoffDir $proj $cfg
+    $handoff = $null
+    if ($sid) { $handoff = Join-Path $handoffDir ("handoff-" + $sid + ".md") }
+    $complete = $handoff -and (Test-HandoffComplete $handoff)
+    $started = $handoff -and (Test-Path -LiteralPath $handoff)
+    if ($complete) { $handoffText = "Saved: ``$handoff``" }
+    elseif ($started) { $handoffText = "Started but not finished: ``$handoff``" }
+    else { $handoffText = 'Not written yet' }
+
+    if ($null -eq $ctx) { $ctxText = 'Unknown (no transcript found for this session yet)'; $next = '' }
+    else {
+        $ctxText = "~$(Format-K $ctx) tokens"
+        if ($ctx -lt $cfg.prep_at) { $next = "Handoff at $(Format-K $cfg.prep_at) ($(Format-K ($cfg.prep_at - $ctx)) to go)" }
+        elseif (-not $complete) { $next = 'Handoff due now: Claude writes it on your next message' }
+        elseif ($ctx -lt $cfg.compact_at) { $next = "Handoff ready. Compaction allowed from $(Format-K $cfg.compact_at)" }
+        else { $next = 'Ready to compact. Type /compact if auto-compact hasn''t run' }
+    }
+
+    # Auto-compact trigger (environment variable read by Claude Code at startup)
+    $trigName = 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE'
+    $live = [Environment]::GetEnvironmentVariable($trigName)
+    $saved = $null
+    try { $saved = [Environment]::GetEnvironmentVariable($trigName, 'User') } catch { }
+    $minCompact = $cfg.compact_at
+    if ($live) {
+        $trigTokens = [int64]([double]$live * 10000)
+        $trigger = "$live% (~$(Format-K $trigTokens) on a 1M window)"
+        if ($trigTokens -gt $minCompact) { $trigger += ". Note: higher than ``compact_at``, so you'll be asked to type /compact yourself" }
+        elseif ($trigTokens -lt $minCompact) { $trigger += ". Auto-compaction is held each turn until $(Format-K $minCompact)" }
+    } else {
+        $trigger = "Not set: Claude Code's default applies, so you'll be asked to type /compact at $(Format-K $minCompact)"
+    }
+    if ($saved -and $saved -ne $live) { $trigger += ". Note: saved as $saved% but this session started with $(if ($live) { "$live%" } else { 'none' }): fully restart Claude" }
+
+    $lines = New-Object Collections.Generic.List[string]
+    $lines.Add("## Claude Context Manager Skill v$version")
+    $lines.Add('')
+    $lines.Add('| | |')
+    $lines.Add('|---|---|')
+    $lines.Add("| **Plugin** | $hooks |")
+    $lines.Add("| **Context** | $ctxText |")
+    if ($next) { $lines.Add("| **Next** | $next |") }
+    $lines.Add("| **Handoff** | $handoffText |")
+    $lines.Add("| **Auto-compact trigger** | $trigger |")
+    $lines.Add('')
+    $lines.Add('### Settings')
+    $lines.Add('')
+    $lines.Add('| Key | Value | Set in |')
+    $lines.Add('|---|---|---|')
+    foreach ($k in $Defaults.Keys) { $lines.Add("| ``$k`` | $(Format-Value $cfg[$k]) | $($cfg._src[$k]) |") }
+    $lines.Add('')
+    $lines.Add("Project file: ``$(Join-Path (Join-Path $proj '.claude') 'context-manager.json')``  ")
+    $lines.Add("User file: ``$(Join-Path (Join-Path $homeDir '.claude') 'context-manager.json')``")
+    [Console]::Out.Write(($lines -join "`n") + "`n")
+}
+
 # ---------- main ----------
 
 try {
+    if ($Mode -eq 'status') { Show-Status; exit 0 }
+
     $raw = [Console]::In.ReadToEnd()
     if (-not $raw) { exit 0 }
     $hookInput = $raw | ConvertFrom-Json
@@ -165,6 +313,12 @@ try {
     $projectDir = $env:CLAUDE_PROJECT_DIR
     if (-not $projectDir) { $projectDir = $hookInput.cwd }
     $cfg = Get-Settings $projectDir
+
+    $ctx = $null
+    if ($Mode -eq 'prompt') {
+        $ctx = Get-ContextTokens $hookInput.transcript_path
+        Write-Heartbeat $hookInput $ctx ([bool]$cfg.enabled)
+    }
     if (-not $cfg.enabled) { exit 0 }
 
     $handoffDir = Get-HandoffDir $projectDir $cfg
@@ -173,7 +327,6 @@ try {
     switch ($Mode) {
 
         'prompt' {
-            $ctx = Get-ContextTokens $hookInput.transcript_path
             if ($null -eq $ctx -or $ctx -lt $cfg.prep_at) { exit 0 }
 
             if (-not (Test-HandoffComplete $handoff)) {

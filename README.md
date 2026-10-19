@@ -29,7 +29,7 @@ and fully restart Claude. **[INSTALL.md](INSTALL.md)** has the desktop-app and t
 
 Ask Claude in plain language, for example:
 
-- `/context-manager-skill:configure show settings`
+- `/context-manager-skill:status` (current settings and where each comes from)
 - `/context-manager-skill:configure for this project, prep at 250k and compact at 280k`
 - `/context-manager-skill:configure turn it off for this project`
 
@@ -46,6 +46,7 @@ Keys: `enabled`, `prep_at`, `compact_at`, `force_at`, `gate_manual`, `offer_on_s
 
 ## Manual commands
 
+- `/context-manager-skill:status`: confirm it's active in this session and show its effective settings
 - `/context-manager-skill:prep-compact`: write a handoff now
 - `/compact` without a handoff is blocked once; run it again within 2 minutes to force it
 
@@ -63,7 +64,8 @@ plugins/context-manager-skill/
   scripts/context-manager.ps1             the hook logic
   scripts/set-autocompact.ps1             sets the auto-compact trigger
   skills/prep-compact/SKILL.md            writes the handoff
-  skills/configure/SKILL.md               shows and changes settings
+  skills/configure/SKILL.md               changes settings
+  skills/status/SKILL.md                  shows status and effective settings
 ```
 
 ## Uninstall

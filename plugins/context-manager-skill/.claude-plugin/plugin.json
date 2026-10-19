@@ -1,7 +1,7 @@
 {
   "name": "context-manager-skill",
   "displayName": "Claude Context Manager Skill",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Saves a handoff before context compaction, holds auto-compaction until it exists, restores it afterwards, and carries it into new sessions. Thresholds are configurable per project or globally. Windows (PowerShell).",
   "author": {
     "name": "LLnet Inc."

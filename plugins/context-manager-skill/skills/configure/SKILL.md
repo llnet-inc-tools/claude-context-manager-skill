@@ -41,7 +41,7 @@ Example project file:
 
 ## How to handle a request
 
-1. **Show settings**: read both JSON files if they exist and report the effective value of each key and which layer it comes from, in a short table.
+1. **Show settings**: tell the user to run `/context-manager-skill:status`, which prints the effective value of every key and the layer it comes from. If they want it from you, read both JSON files and report the same in a short table.
 2. **Change settings**: ask which scope if the user didn't say ("this project" or "all projects"). Read the target file, change only the keys asked for, keep the rest, and write valid JSON. Check that `prep_at` < `compact_at` < `force_at` and point out a conflict instead of writing it.
 3. **Auto-compact trigger**: Claude Code only attempts auto-compaction when context crosses the `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` percentage, a Windows user environment variable that applies to all projects. It should match the lowest `compact_at` the user uses. To set it, with the user's go-ahead, run:
 

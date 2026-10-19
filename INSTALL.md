@@ -105,7 +105,7 @@ Handoffs are saved in `<project>/.claude/context-manager/handoffs/`. That folder
 Ask Claude in plain language:
 
 ```
-/context-manager-skill:configure show settings
+/context-manager-skill:status
 /context-manager-skill:configure for this project, prep at 250k and compact at 280k
 /context-manager-skill:configure turn it off for this project
 ```
@@ -135,6 +135,7 @@ Numbers can be written as `150000`, `"150k"` or `"1.2m"`. Changes apply on the n
 
 | Command | What it does |
 |---|---|
+| `/context-manager-skill:status` | Confirm it's active in this session and show context size, handoff state and effective settings |
 | `/context-manager-skill:prep-compact` | Write a handoff now |
 | `/context-manager-skill:configure` | Show or change settings |
 

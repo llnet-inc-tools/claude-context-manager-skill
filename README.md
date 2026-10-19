@@ -101,6 +101,7 @@ plugins/context-manager-skill/
   tests/context-manager.test.ts              run with `claude plugin test`
 .github/workflows/ci.yml                     validate + test on every push and PR
 .github/workflows/release.yml                tag + GitHub release on a new version
+scripts/update-and-enable-autoupdate.ps1     one-step update + auto-update for users
 ```
 
 ## License

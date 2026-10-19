@@ -69,6 +69,7 @@ A marketplace can't switch auto-update on for you, so do it once. Claude Code's 
 
 | Option | How |
 |---|---|
+| **One-step script** | Download [`scripts/update-and-enable-autoupdate.ps1`](scripts/update-and-enable-autoupdate.ps1), right-click it → **Run with PowerShell** (macOS/Linux: `pwsh ./update-and-enable-autoupdate.ps1`). It updates the plugin, turns auto-update on and keeps a backup of your settings |
 | **Terminal menu** | Run `claude` in a terminal, send `/plugin`, press **Tab** to reach **Marketplaces**, select `llnet-inc-tools`, choose **Enable auto-update** |
 | **Settings file** | In `~/.claude/settings.json` (Windows: `%USERPROFILE%\.claude\settings.json`), add `"autoUpdate": true` to the `llnet-inc-tools` entry under `extraKnownMarketplaces`. You can ask Claude Code to make this edit. A value set here locks the toggle in `/plugin` |
 

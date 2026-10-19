@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Validate and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate the marketplace and the plugin
+        run: |
+          claude plugin validate --strict .
+          claude plugin validate --strict plugins/context-manager-skill
+
+      - name: Run the plugin's tests
+        run: claude plugin test plugins/context-manager-skill
+
+      - name: Require a version bump and changelog entry when the plugin changes
+        if: github.event_name == 'pull_request'
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          manifest=plugins/context-manager-skill/.claude-plugin/plugin.json
+          if git diff --quiet "$base" HEAD -- plugins/context-manager-skill; then
+            echo "Plugin unchanged; no version bump needed."
+            exit 0
+          fi
+          old=$(git show "$base:$manifest" | jq -r .version)
+          new=$(jq -r .version "$manifest")
+          if [ "$old" = "$new" ]; then
+            echo "::error file=$manifest::Plugin files changed but version is still $new. Installed copies only update when the version changes."
+            exit 1
+          fi
+          if ! grep -q "^## \[$new\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::No CHANGELOG.md entry for $new."
+            exit 1
+          fi
+          echo "Version $old -> $new with a changelog entry."

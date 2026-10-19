@@ -43,7 +43,7 @@ Gotchas discovered the hard way: commands that hang, flaky tests, approaches alr
 <!-- handoff-complete -->
 ```
 
-The last line must be exactly `<!-- handoff-complete -->`, written only once everything else is in the file. Compaction is held until that line is present.
+The last line must be exactly `<!-- handoff-complete -->`, written only once everything else is in the file. Compaction is held until that line is present. The `/context-manager` command shows whether the handoff counts as saved.
 
 ## After writing
 

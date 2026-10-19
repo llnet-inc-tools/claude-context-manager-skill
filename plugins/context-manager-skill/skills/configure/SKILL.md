@@ -1,17 +1,17 @@
 ---
 name: configure
-description: Show or change context-manager settings (prepare-handoff threshold, compaction threshold, safety limit, on/off) for this project or for all projects, and set the auto-compact trigger. Use when the user asks to view, set, change, enable or disable context-manager or its thresholds.
+description: Change Claude Context Manager Skill settings (handoff threshold, compaction threshold, safety limit, automatic compaction, context meter, on/off) for this project or for all projects. Use when the user asks to set, change, enable or disable the context manager or its thresholds.
 ---
 
-# Configure context-manager
+# Configure Claude Context Manager Skill
 
 ## Where settings live (highest priority first)
 
 | Layer | File | Applies to |
 |---|---|---|
 | Project | `<project root>/.claude/context-manager.json` | This project only. Commit it to share with the repo |
-| Universal | `~/.claude/context-manager.json` (on Windows `%USERPROFILE%\.claude\context-manager.json`) | Every project |
-| Plugin options | Set from the plugin's **Configure options** (`/plugin` → Installed → context-manager) | Every project |
+| Universal | `<home>/.claude/context-manager.json` (Windows: `%USERPROFILE%\.claude\context-manager.json`; or `$CLAUDE_CONFIG_DIR/context-manager.json` when that is set) | Every project |
+| Plugin options | `/plugin` → Installed → Claude Context Manager Skill → Configure options | Every project |
 | Defaults | Built in | Fallback |
 
 A key set in a higher layer wins; keys it leaves out fall through to the next layer.
@@ -20,12 +20,14 @@ A key set in a higher layer wins; keys it leaves out fall through to the next la
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | Turn context-manager off for a project with `false` |
+| `enabled` | `true` | `false` turns it off for that scope |
 | `prep_at` | `130000` | Context size at which Claude writes the handoff |
-| `compact_at` | `150000` | Auto-compaction is held below this size |
+| `compact_at` | `150000` | Compaction runs at this size once the handoff is saved; it is held below it |
 | `force_at` | `300000` | Above this, compaction always runs, handoff or not |
-| `gate_manual` | `true` | When `true`, a manual `/compact` without a handoff is blocked once (running it again within 2 minutes forces it) |
-| `offer_on_startup` | `true` | New sessions are told about the latest handoff saved in this project |
+| `auto_compact` | `true` | Compact automatically after the turn that reaches `compact_at`. `false`: the user types `/compact` |
+| `show_meter` | `true` | Show the context meter above the prompt (terminal and desktop app) |
+| `gate_manual` | `true` | A manual `/compact` with no handoff is blocked once; running it again within 2 minutes forces it |
+| `offer_on_startup` | `true` | New sessions are pointed at the latest handoff saved in this project |
 | `handoff_dir` | `.claude/context-manager/handoffs` | Where handoffs are saved, relative to the project root |
 
 Numbers may be written as `150000`, `"150k"` or `"1.2m"`.
@@ -41,13 +43,6 @@ Example project file:
 
 ## How to handle a request
 
-1. **Show settings**: tell the user to run `/context-manager-skill:status`, which prints the effective value of every key and the layer it comes from. If they want it from you, read both JSON files and report the same in a short table.
-2. **Change settings**: ask which scope if the user didn't say ("this project" or "all projects"). Read the target file, change only the keys asked for, keep the rest, and write valid JSON. Check that `prep_at` < `compact_at` < `force_at` and point out a conflict instead of writing it.
-3. **Auto-compact trigger**: Claude Code only attempts auto-compaction when context crosses the `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` percentage, a Windows user environment variable that applies to all projects. It should match the lowest `compact_at` the user uses. To set it, with the user's go-ahead, run:
-
-   ```
-   powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/set-autocompact.ps1" -Tokens <lowest compact_at>
-   ```
-
-   Add `-Clear` instead of `-Tokens` to remove it. Tell the user the app must be fully quit and reopened for it to take effect. Without it, context-manager still prepares the handoff and tells the user when to type `/compact`.
-4. Settings files are read on every prompt, so changes to them apply immediately; no restart needed.
+1. **Show settings**: tell the user to run `/context-manager`, which prints every effective value and the layer it comes from.
+2. **Change settings**: ask which scope if the user didn't say ("this project" or "all projects"). Read the target file if it exists, change only the keys asked for, keep the rest, and write valid JSON. Check that `prep_at` < `compact_at` < `force_at` and point out a conflict instead of writing it.
+3. Changes apply from the user's next message; no restart is needed. Suggest `/context-manager` to confirm.

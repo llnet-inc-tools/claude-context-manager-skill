@@ -1,17 +1,13 @@
 {
   "name": "context-manager-skill",
   "displayName": "Claude Context Manager Skill",
-  "version": "1.1.0",
-  "description": "Saves a handoff before context compaction, holds auto-compaction until it exists, restores it afterwards, and carries it into new sessions. Thresholds are configurable per project or globally. Windows (PowerShell).",
-  "author": {
-    "name": "LLnet Inc."
-  },
-  "keywords": [
-    "context",
-    "compaction",
-    "handoff",
-    "tokens"
-  ],
+  "version": "2.0.0",
+  "description": "Saves a handoff before context compaction, holds compaction until it exists, compacts at your threshold, restores the handoff afterwards and shows a live context meter. Per-project or global settings. Windows, macOS and Linux.",
+  "author": { "name": "LLnet Inc." },
+  "homepage": "https://github.com/llnet-inc-tools/claude-context-manager-skill",
+  "repository": "https://github.com/llnet-inc-tools/claude-context-manager-skill",
+  "license": "MIT",
+  "keywords": ["context", "compaction", "handoff", "tokens", "context-window"],
   "userConfig": {
     "prep_at": {
       "type": "number",
@@ -19,15 +15,15 @@
       "description": "Context size at which Claude writes a compaction handoff. A project's .claude/context-manager.json overrides this.",
       "default": 130000,
       "min": 10000,
-      "max": 1000000
+      "max": 2000000
     },
     "compact_at": {
       "type": "number",
-      "title": "Allow compaction at (tokens)",
-      "description": "Auto-compaction is held below this size. Pair it with the auto-compact trigger (/context-manager-skill:configure can set it).",
+      "title": "Compact at (tokens)",
+      "description": "Compaction runs once context reaches this size and the handoff is saved; it is held below it.",
       "default": 150000,
       "min": 10000,
-      "max": 1000000
+      "max": 2000000
     },
     "force_at": {
       "type": "number",
@@ -35,9 +31,19 @@
       "description": "Above this size compaction always runs, handoff or not.",
       "default": 300000,
       "min": 10000,
-      "max": 1000000
+      "max": 2000000
+    },
+    "auto_compact": {
+      "type": "boolean",
+      "title": "Compact automatically",
+      "description": "Compact on its own after the turn where context reaches the compaction threshold with a saved handoff. Off: you type /compact.",
+      "default": true
+    },
+    "show_meter": {
+      "type": "boolean",
+      "title": "Show context meter",
+      "description": "Show context size and handoff state above the prompt (terminal and desktop app).",
+      "default": true
     }
-  },
-  "repository": "https://github.com/llnet-inc-tools/claude-context-manager-skill",
-  "homepage": "https://github.com/llnet-inc-tools/claude-context-manager-skill"
+  }
 }

@@ -7,7 +7,7 @@
       "name": "context-manager-skill",
       "displayName": "Claude Context Manager Skill",
       "source": "./plugins/context-manager-skill",
-      "description": "Saves a handoff before compaction, holds auto-compaction until it exists, and restores it afterwards. Thresholds per project or global."
+      "description": "Saves a handoff before compaction, holds compaction until it exists, compacts at your threshold and restores it afterwards, with a live context meter. Windows, macOS and Linux."
     }
   ]
 }

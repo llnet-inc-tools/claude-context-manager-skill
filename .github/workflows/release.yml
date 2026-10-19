@@ -1,0 +1,51 @@
+name: Release
+
+# Publishes a GitHub release, tagged context-manager-skill--v<version>, whenever
+# main gets a plugin.json with a version that has no release yet.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - plugins/context-manager-skill/.claude-plugin/plugin.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate and test before releasing
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude plugin validate --strict .
+          claude plugin validate --strict plugins/context-manager-skill
+          claude plugin test plugins/context-manager-skill
+
+      - name: Tag and publish the release if this version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version plugins/context-manager-skill/.claude-plugin/plugin.json)
+          tag="context-manager-skill--v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag already released."
+            exit 0
+          fi
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          gh release create "$tag" --title "v$version" --notes-file notes.md --target "$GITHUB_SHA"

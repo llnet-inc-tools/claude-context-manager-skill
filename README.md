@@ -27,7 +27,7 @@ Paste this into any Claude Code session:
 /plugin install context-manager-skill --marketplace llnet-inc-tools/claude-context-manager-skill
 ```
 
-Pick **user** scope for every project, or **project** scope for one repository. Then turn on automatic updates: `/plugin` → **Marketplaces** → `llnet-inc-tools` → **Enable auto-update**.
+Pick **user** scope for every project, or **project** scope for one repository. Then turn on automatic updates: run `claude` in a terminal, `/plugin` → **Marketplaces** → `llnet-inc-tools` → **Enable auto-update** (it's not in the Claude app's Settings → Plugins page; [INSTALL.md](INSTALL.md#3-turn-on-automatic-updates) has another way).
 
 **[INSTALL.md](INSTALL.md)** has the desktop-app and terminal steps, how to check it works, and troubleshooting.
 
@@ -75,7 +75,7 @@ Keys: `enabled`, `prep_at`, `compact_at`, `force_at`, `auto_compact`, `show_mete
 Releases follow [Semantic Versioning](https://semver.org/) and are listed in [CHANGELOG.md](CHANGELOG.md) and on the [releases page](https://github.com/llnet-inc-tools/claude-context-manager-skill/releases).
 
 - **Automatic updates:** turn on auto-update for the `llnet-inc-tools` marketplace once (see Install). Claude Code then installs new releases in the background, and they apply from your next session.
-- **Manual update:** `/plugin` → **Installed** → Claude Context Manager Skill → **Update now**, or `claude plugin update context-manager-skill@llnet-inc-tools`.
+- **Manual update:** `claude plugin marketplace update llnet-inc-tools`, then `claude plugin update context-manager-skill@llnet-inc-tools`.
 
 ### Releasing (maintainers)
 

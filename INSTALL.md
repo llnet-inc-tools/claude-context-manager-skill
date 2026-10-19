@@ -63,13 +63,27 @@ Collaborators get the marketplace once they trust the folder, and each runs the 
 
 ## 3. Turn on automatic updates
 
-A marketplace can't switch auto-update on for you, so do it once:
+A marketplace can't switch auto-update on for you, so do it once. Claude Code's plugin settings are shared by the terminal and the desktop app's Code tab on the same computer, so doing it in either covers both.
 
-`/plugin` → **Marketplaces** → `llnet-inc-tools` → **Enable auto-update**
+> **Not in the Claude app's Settings → Plugins.** That page manages claude.ai and Cowork plugins. Claude Code marketplaces such as `llnet-inc-tools` don't appear there.
 
-New releases then install in the background and apply from your next session. To update by hand instead: `/plugin` → **Installed** → Claude Context Manager Skill → **Update now**.
+| Option | How |
+|---|---|
+| **Terminal menu** | Run `claude` in a terminal, send `/plugin`, press **Tab** to reach **Marketplaces**, select `llnet-inc-tools`, choose **Enable auto-update** |
+| **Settings file** | In `~/.claude/settings.json` (Windows: `%USERPROFILE%\.claude\settings.json`), add `"autoUpdate": true` to the `llnet-inc-tools` entry under `extraKnownMarketplaces`. You can ask Claude Code to make this edit. A value set here locks the toggle in `/plugin` |
 
-Organization admins can turn it on for everyone with `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in managed settings.
+New releases then install in the background and apply from your next session.
+
+**Update now**, without waiting (any terminal):
+
+```
+claude plugin marketplace update llnet-inc-tools
+claude plugin update context-manager-skill@llnet-inc-tools
+```
+
+The first line refreshes the marketplace listing; until it runs, **Update** in the plugin manager stays greyed out because Claude Code doesn't know a newer version exists. Restart the app or start a new session afterwards.
+
+Organization admins can turn auto-update on for everyone with `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in managed settings.
 
 ## 4. Check that it works
 
@@ -193,6 +207,7 @@ claude plugin uninstall context-manager-skill@llnet-inc-tools
 | Symptom | Fix |
 |---|---|
 | Over SSH: *"these plugins come from your computer and run without their hooks"* | Install it on the remote machine from inside the SSH session (step 1), then start a new session |
+| **Update** is greyed out | Run `claude plugin marketplace update llnet-inc-tools`, then update (see step 3) |
 | `/context-manager` isn't listed | In an SSH session, see the row above. Otherwise check the plugin is enabled (`/plugin` → **Installed**), then update Claude Code. Older versions can't load mods |
 | `/plugin` says mods are blocked, or the plugin never runs on a work machine | Your organization restricts user-installed mods (`allowManagedModsOnly`). Ask your admin to install it through managed settings |
 | Nothing happens past 130k | Run `/context-manager`. It shows whether a settings file turned it off or raised `prep_at`, and lists any settings problems |

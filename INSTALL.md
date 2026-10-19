@@ -69,13 +69,14 @@ A marketplace can't switch auto-update on for you, so do it once. Claude Code's 
 
 | Option | How |
 |---|---|
-| **One-step script** | Open PowerShell and paste: `irm https://raw.githubusercontent.com/llnet-inc-tools/claude-context-manager-skill/main/scripts/update-and-enable-autoupdate.ps1 \| iex`. It updates the plugin, turns auto-update on and keeps a backup of your settings. Or download [`scripts/update-and-enable-autoupdate.ps1`](scripts/update-and-enable-autoupdate.ps1) and right-click → **Run with PowerShell** (macOS/Linux: `pwsh ./update-and-enable-autoupdate.ps1`) |
+| **Desktop app only** (no `claude` command in your terminal) | In a Code-tab session, ask Claude: *"In my Claude Code user settings (`~/.claude/settings.json`), back it up, then add `"autoUpdate": true` to the `llnet-inc-tools` entry under `extraKnownMarketplaces`."* and approve the edit |
+| **One-step script** (needs the `claude` CLI) | Open PowerShell and paste: `irm https://raw.githubusercontent.com/llnet-inc-tools/claude-context-manager-skill/main/scripts/update-and-enable-autoupdate.ps1 \| iex`. It updates the plugin, turns auto-update on and keeps a backup of your settings. Or download [`scripts/update-and-enable-autoupdate.ps1`](scripts/update-and-enable-autoupdate.ps1) and right-click → **Run with PowerShell** (macOS/Linux: `pwsh ./update-and-enable-autoupdate.ps1`) |
 | **Terminal menu** | Run `claude` in a terminal, send `/plugin`, press **Tab** to reach **Marketplaces**, select `llnet-inc-tools`, choose **Enable auto-update** |
 | **Settings file** | In `~/.claude/settings.json` (Windows: `%USERPROFILE%\.claude\settings.json`), add `"autoUpdate": true` to the `llnet-inc-tools` entry under `extraKnownMarketplaces`. You can ask Claude Code to make this edit. A value set here locks the toggle in `/plugin` |
 
 New releases then install in the background and apply from your next session.
 
-**Update now**, without waiting (any terminal):
+**Update now**, without waiting. In the desktop app, send `/plugin marketplace update llnet-inc-tools` in a Code-tab session, then **+** → **Plugins** → **Manage plugins** → **Update**. From a terminal with the `claude` CLI:
 
 ```
 claude plugin marketplace update llnet-inc-tools

@@ -45,7 +45,16 @@ function Wait-BeforeClose {
 
 function Invoke-Main {
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-        throw "The 'claude' command wasn't found. Install Claude Code (https://code.claude.com) or open a new terminal, then run this again."
+        Note "The 'claude' command isn't installed here. That's normal if you only use the Claude desktop app,"
+        Note "which runs Claude Code inside the app. Do these two steps in a Code-tab session instead:"
+        Write-Host ''
+        Write-Host '   1. Send:  /plugin marketplace update llnet-inc-tools'
+        Write-Host '      then + > Plugins > Manage plugins > Claude Context Manager Skill > Update, and restart the app.'
+        Write-Host '   2. Ask Claude: "In my Claude Code user settings (~/.claude/settings.json), back it up, then add'
+        Write-Host '      \"autoUpdate\": true to the llnet-inc-tools entry under extraKnownMarketplaces."'
+        Write-Host ''
+        Note 'Using a terminal too? Install the CLI from https://code.claude.com, open a new window and run this again.'
+        return
     }
 
     # 1. Marketplace and plugin

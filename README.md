@@ -35,6 +35,7 @@ Pick **user** scope for every project, or **project** scope for one repository. 
 | **Claude Code in a terminal** | ✅ | Including JetBrains IDEs, which run it in their terminal. Meter shown |
 | **Claude desktop app, Code tab** | ✅ | Meter shown |
 | **VS Code extension** | ✅ | Everything except the meter; use `/context-manager` |
+| **SSH sessions** (desktop app, VS Code Remote) | ✅ | Install the plugin **on the remote machine** too. Over SSH, plugins from your own computer bring their skills but not their hooks |
 | **Cloud sessions** (claude.ai/code) | ❌ | Cloud sessions don't load plugins installed on your machine |
 | **claude.ai chat, Cowork** | ❌ | This plugin uses Claude Code hooks, which those apps don't run |
 | **Organization-managed Claude Code** | ⚠️ | Admins can block user-installed mods (`allowManagedModsOnly`). The compaction gate only runs when your organization installs the plugin through managed settings |

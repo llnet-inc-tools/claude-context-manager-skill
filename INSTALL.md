@@ -12,6 +12,8 @@ A Claude Code plugin that saves a handoff before your context is compacted, hold
 
 Not supported: cloud sessions (claude.ai/code), claude.ai chat and Cowork. See [Compatibility](README.md#compatibility).
 
+> **Working over SSH?** Install the plugin on the remote machine as well, from inside the SSH session. Plugins installed on your own computer bring their skills to an SSH session but not their hooks, and the hooks do all the work.
+
 ## 1. Install
 
 ### Option A: one command, in any Claude Code session
@@ -159,7 +161,8 @@ claude plugin uninstall context-manager-skill@llnet-inc-tools
 
 | Symptom | Fix |
 |---|---|
-| `/context-manager` isn't listed | Check the plugin is enabled (`/plugin` → **Installed**), then update Claude Code. Older versions can't load mods |
+| Over SSH: *"these plugins come from your computer and run without their hooks"* | Install it on the remote machine from inside the SSH session (step 1), then start a new session |
+| `/context-manager` isn't listed | In an SSH session, see the row above. Otherwise check the plugin is enabled (`/plugin` → **Installed**), then update Claude Code. Older versions can't load mods |
 | `/plugin` says mods are blocked, or the plugin never runs on a work machine | Your organization restricts user-installed mods (`allowManagedModsOnly`). Ask your admin to install it through managed settings |
 | Nothing happens past 130k | Run `/context-manager`. It shows whether a settings file turned it off or raised `prep_at`, and lists any settings problems |
 | It never compacts | Check `auto_compact` is `true` and the handoff shows as saved in `/context-manager`. Compaction waits for the turn to finish |

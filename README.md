@@ -11,18 +11,19 @@ Handoffs are saved in `<project>/.claude/context-manager/handoffs/` (git-ignored
 
 ## Install
 
-1. In the Claude app's **Code** tab, send:
-   ```
-   /plugin marketplace add llnet-inc-tools/claude-context-manager-skill
-   ```
-   If the repo is private, the machine needs git access to it (for example `gh auth login`).
-2. Click **+** next to the prompt box → **Plugins** → **Add plugin** → **Claude Context Manager Skill**, then choose a scope:
-   - **Your user account**: on in every project
-   - **This project**: on for this repo (recorded in `.claude/settings.json`, so it travels with the repo)
-   - **Local**: this repo, just for you
-3. Optional but recommended, so compaction actually triggers at your threshold: ask Claude
-   `/context-manager-skill:configure set the auto-compact trigger to 150k`
-   then fully quit the app (system tray too) and reopen it.
+Paste this into any Claude Code session (Windows, Claude Code 2.1.275 or later):
+
+```
+/plugin install context-manager-skill --marketplace llnet-inc-tools/claude-context-manager-skill
+```
+
+Choose **user** scope for every project or **project** scope for one repo, then ask Claude:
+
+```
+/context-manager-skill:configure set the auto-compact trigger to 150k
+```
+
+and fully restart Claude. **[INSTALL.md](INSTALL.md)** has the desktop-app and terminal steps, a quick way to test it, and troubleshooting.
 
 ## Configure
 

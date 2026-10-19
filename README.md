@@ -5,13 +5,17 @@
 
 A Claude Code plugin that keeps long sessions from being compacted out from under you, and keeps them small enough to stay cheap.
 
-1. **Prepare.** At 130k tokens, Claude writes a handoff (goal, status, decisions, key files, next steps) and confirms it in one line.
-2. **Gate.** Compaction is held below 150k, and until the handoff is complete. Above 300k it always runs, as a safety valve.
-3. **Compact.** Once the handoff is saved and context reaches 150k, the plugin compacts after the current turn.
-4. **Restore.** Right after compaction, the handoff is given back to Claude.
-5. **Carry over.** A new session in the same project is pointed at the latest handoff.
-6. **See it.** A live meter above the prompt shows context size and handoff state:
-   `Context 142k / 1M (14%) · handoff due now`
+1. **Check before big work.** When Claude plans a set of tasks, it estimates whether they fit before compaction. If not, you choose: raise this session's limit, continue in a fresh session that picks up automatically, or go ahead anyway.
+2. **Prepare.** At 130k tokens, Claude writes a handoff (goal, status, decisions, key files, next steps).
+3. **Offer the right next step.** Claude judges where the work stands and you get a short list of options, recommended one first: keep going, compact now, finish this step then compact, start fresh, continue in a fresh session, review the handoff, or snooze. Picking one runs it.
+4. **Gate and compact.** Compaction is held below 150k and until the handoff is complete, then runs on its own after the turn. Above 300k it always runs, as a safety valve.
+5. **Restore and carry over.** After compaction the handoff is given back to Claude, and a new session in the same project is pointed at it.
+6. **See it.** A live meter above the prompt shows context size and handoff state, and holds the option buttons when there's a choice to make:
+   ```
+   Context 142k / 1M (14%) · handoff saved · compact at 150k
+   Mid-migration; finish the schema change first. How do you want to continue?
+   [ Finish this step, then compact (recommended) ]  Keep going  Compact now  Start a fresh session  …
+   ```
 
 Every threshold can be set per project or for all projects. Handoffs are saved in `<project>/.claude/context-manager/handoffs/`, and that folder git-ignores itself.
 
@@ -34,7 +38,7 @@ Pick **user** scope for every project, or **project** scope for one repository. 
 | **Windows, macOS, Linux, WSL** | ✅ | No scripts, shells or runtimes needed; the plugin runs inside Claude Code |
 | **Claude Code in a terminal** | ✅ | Including JetBrains IDEs, which run it in their terminal. Meter shown |
 | **Claude desktop app, Code tab** | ✅ | Meter shown |
-| **VS Code extension** | ✅ | Everything except the meter; use `/context-manager` |
+| **VS Code extension** | ✅ | No meter or buttons; Claude asks the same options with a multiple-choice prompt |
 | **SSH sessions** (desktop app, VS Code Remote) | ✅ | Install the plugin **on the remote machine** too. Over SSH, plugins from your own computer bring their skills but not their hooks |
 | **Cloud sessions** (claude.ai/code) | ❌ | Cloud sessions don't load plugins installed on your machine |
 | **claude.ai chat, Cowork** | ❌ | This plugin uses Claude Code hooks, which those apps don't run |
@@ -47,6 +51,9 @@ Requires a recent Claude Code (tested with 2.1.303). Update with `claude update`
 | Command | What it does |
 |---|---|
 | `/context-manager` | Status: context size, handoff state, and every setting with where it comes from |
+| `/context-manager options` | Show the options picker now |
+| `/context-manager run <option>` | Run an option by name: `auto`, `compact_now`, `finish_step`, `fresh_session`, `continue_fresh`, `expand`, `review`, `snooze` |
+| `/context-manager-skill:plan-check` | Check whether the work you're about to start fits before compaction |
 | `/context-manager-skill:prep-compact` | Write a handoff now |
 | `/context-manager-skill:configure` | Change settings in plain language, e.g. *"for this project, prep at 250k and compact at 280k"* |
 
@@ -61,7 +68,7 @@ Highest priority first:
 | Plugin options | `/plugin` → **Installed** → Claude Context Manager Skill → **Configure options** |
 | Defaults | prep 130k · compact 150k · safety 300k |
 
-Keys: `enabled`, `prep_at`, `compact_at`, `force_at`, `auto_compact`, `show_meter`, `gate_manual`, `offer_on_startup`, `handoff_dir`. Numbers can be `150000` or `"150k"`. [INSTALL.md](INSTALL.md#configure) describes each one.
+Keys: `enabled`, `prep_at`, `compact_at`, `force_at`, `auto_compact`, `show_meter`, `offer_options`, `preflight_check`, `gate_manual`, `offer_on_startup`, `handoff_dir`. Numbers can be `150000` or `"150k"`. [INSTALL.md](INSTALL.md#configure) describes each one.
 
 ## Updates and versioning
 
@@ -86,10 +93,11 @@ Locally: `claude plugin validate --strict .` and `claude plugin test plugins/con
 plugins/context-manager-skill/
   .claude-plugin/plugin.json                 manifest, version, plugin options
   hooks/hooks.json                           loads the mod
-  hooks/register.tsx                         the hooks: prompt, compaction, turn end, meter, /context-manager
-  hooks/core.ts                              settings, thresholds and text (pure logic)
+  hooks/register.tsx                         the hooks: prompt, compaction, turn end, tool, meter, picker, /context-manager
+  hooks/core.ts                              settings, thresholds, options and text (pure logic)
   skills/prep-compact/SKILL.md               how Claude writes the handoff
   skills/configure/SKILL.md                  how Claude changes settings
+  skills/plan-check/SKILL.md                 how Claude checks planned work against the budget
   tests/context-manager.test.ts              run with `claude plugin test`
 .github/workflows/ci.yml                     validate + test on every push and PR
 .github/workflows/release.yml                tag + GitHub release on a new version

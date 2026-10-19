@@ -17,15 +17,21 @@ type World = {
   compactions: string[]
   seen: { context: string[] }
   toasts: string[]
+  filled: string[]
+  commands: string[]
+  prompts: string[]
 }
 
 /** The engine beneath the plugin: an in-memory project, a context size the test sets, and core's compaction. */
-function world(on: On, opts: { tokens?: number; files?: Record<string, string> } = {}): World {
+function world(on: On, opts: { tokens?: number; files?: Record<string, string>; surfaces?: readonly ('terminal' | 'desktop' | 'vscode' | 'mobile')[] } = {}): World {
   const files = new Map(Object.entries(opts.files ?? {}))
   const tokens = { value: opts.tokens }
   const compactions: string[] = []
   const seen = { context: [] as string[] }
   const toasts: string[] = []
+  const filled: string[] = []
+  const commands: string[] = []
+  const prompts: string[] = []
   mock.store(on)
   mock.env(on, { HOME })
   const clock = mock.clock(on, { now: Date.parse('2026-10-19T14:00:00Z') })
@@ -62,16 +68,30 @@ function world(on: On, opts: { tokens?: number; files?: Record<string, string> }
     return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('session.surfaces', () => ({ value: opts.surfaces ?? (['terminal'] as const) }))
+  on('tool.register', ($, e) => ({ value: { tool: `mcp__context-manager-skill__${e.name}` } }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('prompt.fill', ($, e) => {
+    filled.push(e.text)
+    return { isFilled: true, text: e.text, cursor: e.text.length }
+  })
+  on('command.run', { command: 'clear' }, () => {
+    commands.push('clear')
+    return { text: '' }
+  })
   on('ui.render', () => ({ type: 'engine', ref: 0 }))
   on('session.compact', ($, e) => {
     compactions.push(e.trigger)
     return { messages: [{ role: 'user', text: 'summary', toolUses: [] }], tokensBefore: tokens.value, tokensAfter: 20_000 }
   })
   on('prompt.submit', ($, e) => {
+    prompts.push(e.text)
     seen.context = [...(e.context ?? [])]
     return { text: e.text, context: e.context }
   })
-  return { files, tokens, compactions, seen, toasts, clock }
+  return { files, tokens, compactions, seen, toasts, clock, filled, commands, prompts }
 }
 
 /** Submits a prompt as the person would and returns the context blocks the model was given. */
@@ -185,7 +205,6 @@ describe('compacting on its own', () => {
     $.turn.complete({ answer: 'done', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'completed' } as never)
 
   test('compacts after the turn once the handoff is saved and compact_at is reached', async ($, on) => {
-    on('turn.complete', ($, e) => ({ text: e.answer }))
     const w = world(on, { tokens: 160_000, files: { [HANDOFF]: DONE } })
     await turnEnds($)
     expect(w.compactions).toEqual([])
@@ -197,7 +216,6 @@ describe('compacting on its own', () => {
   })
 
   test('waits while the handoff is missing', async ($, on) => {
-    on('turn.complete', ($, e) => ({ text: e.answer }))
     const w = world(on, { tokens: 160_000 })
     await turnEnds($)
     await w.clock.advance(2000)
@@ -205,7 +223,6 @@ describe('compacting on its own', () => {
   })
 
   test('leaves it to you when auto_compact is off', { options: { auto_compact: false } }, async ($, on) => {
-    on('turn.complete', ($, e) => ({ text: e.answer }))
     const w = world(on, { tokens: 160_000, files: { [HANDOFF]: DONE } })
     await turnEnds($)
     await w.clock.advance(2000)
@@ -267,5 +284,181 @@ describe('context meter', () => {
     } as never)
     expect(await ui.find({ type: 'Text', text: /Context/ })).toBeUndefined()
     await ui.unmount()
+  })
+})
+
+// ---------- v2.1: options picker, pre-flight check, actions ----------
+
+const TOOL = 'mcp__context-manager-skill__context_manager'
+
+async function startSession($: Engine): Promise<void> {
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+}
+
+async function callTool($: Engine, input: Record<string, unknown>): Promise<string> {
+  const r = (await $.tool.call({ tool: TOOL, tool_use_id: `tu-${Math.random()}`, ...input } as never)) as { result?: unknown }
+  return String(r.result)
+}
+
+async function startTurn($: Engine, text = 'do the work'): Promise<void> {
+  await $.turn.start({ text, turnId: 't-run' } as never)
+}
+
+async function endTurn($: Engine): Promise<void> {
+  await $.turn.complete({ answer: 'done', durationMs: 1000, isAborted: false, turnId: 't-run', reason: 'completed' } as never)
+}
+
+describe('pre-flight check', () => {
+  test('adds the context budget when Claude creates a task list, once per turn', async ($, on) => {
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'x' } } } as never))
+    world(on, { tokens: 120_000 })
+    await startSession($)
+    await startTurn($)
+    const first = (await $.tool.call({ tool: 'TaskCreate', tool_use_id: 'a', subject: 'x', description: 'y' } as never)) as { context?: string[] }
+    expect(first.context?.[0]).toContain('30k of room')
+    expect(first.context?.[0]).toContain(TOOL)
+    const second = (await $.tool.call({ tool: 'TaskCreate', tool_use_id: 'b', subject: 'x', description: 'y' } as never)) as { context?: string[] }
+    expect(second.context).toBeUndefined()
+  })
+
+  test('can be switched off', { options: { preflight_check: false } }, async ($, on) => {
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'x' } } } as never))
+    world(on, { tokens: 120_000 })
+    await startSession($)
+    await startTurn($)
+    const r = (await $.tool.call({ tool: 'TaskCreate', tool_use_id: 'a', subject: 'x', description: 'y' } as never)) as { context?: string[] }
+    expect(r.context).toBeUndefined()
+  })
+
+  test('an overflow offer recommends raising the limit when the work fits the window', async ($, on) => {
+    world(on, { tokens: 120_000 })
+    await startSession($)
+    const text = await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 200_000, reason: 'Six files to refactor.' })
+    expect(text).toContain('buttons above the prompt')
+    expect(text).toMatch(/1\. Raise this session's limit to 350k \(recommended\)/)
+    expect(text).toContain('Do not start the tasks')
+  })
+
+  test('recommends continuing in a fresh session when the work cannot fit', async ($, on) => {
+    world(on, { tokens: 120_000 })
+    await startSession($)
+    const text = await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 900_000 })
+    expect(text).not.toContain('Raise this session')
+    expect(text).toMatch(/1\. Continue in a fresh session \(recommended\)/)
+  })
+
+  test('raising the limit applies to this session only', async ($, on) => {
+    const w = world(on, { tokens: 120_000 })
+    await startSession($)
+    await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 200_000 })
+    expect(await callTool($, { action: 'run', option: 'expand' })).toContain('now 350k')
+    const out = await $.command.run({ command: 'context-manager', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as never)
+    expect((out as { text?: string }).text).toMatch(/compact_at\s+350k\s+this session/)
+    expect(w.files.get(`${ROOT}/.claude/context-manager.json`)).toBeUndefined() // the project is untouched
+  })
+})
+
+describe('options picker', () => {
+  test('VS Code gets an AskUserQuestion instruction instead of buttons', async ($, on) => {
+    world(on, { tokens: 140_000, files: { [HANDOFF]: DONE }, surfaces: ['vscode'] })
+    await startSession($)
+    const text = await callTool($, { action: 'offer', kind: 'handoff', situation: 'near_done' })
+    expect(text).toContain('AskUserQuestion')
+    expect(text).toMatch(/1\. Start a fresh session \(recommended\)/)
+  })
+
+  test('a handoff offer waits until the handoff is complete', async ($, on) => {
+    world(on, { tokens: 140_000, files: { [HANDOFF]: '# half' } })
+    await startSession($)
+    expect(await callTool($, { action: 'offer', kind: 'handoff', situation: 'mid_task' })).toContain('not complete')
+  })
+
+  test('the prep note asks Claude to offer options once the handoff is saved', async ($, on) => {
+    const w = world(on, { tokens: 140_000 })
+    await startSession($)
+    const context = await submit($, w)
+    expect(context.some(c => c.includes('action "offer", kind "handoff"'))).toBe(true)
+  })
+
+  test('draws the options as buttons, recommended first, and runs the one pressed', async ($, on) => {
+    const w = world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    await callTool($, { action: 'offer', kind: 'handoff', situation: 'delicate_step', reason: 'Mid-migration.' })
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'context-manager-skill', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10 } } as never)
+      expect(await ui.find({ key: 'opt-finish_step' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /Mid-migration/ })).toBeDefined()
+      if (surface === 'desktop') {
+        await ui.press({ key: 'opt-snooze' })
+        expect(w.files.get(`${ROOT}/.claude/context-manager.json`)).toContain('"compact_at": 250000')
+      }
+      await ui.unmount()
+    }
+  })
+})
+
+describe('actions', () => {
+  test('compact now, picked mid-turn, runs when the turn ends', async ($, on) => {
+    const w = world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    await startTurn($)
+    await callTool($, { action: 'offer', kind: 'handoff', situation: 'mid_task' })
+    expect(await callTool($, { action: 'run', option: 'compact_now' })).toContain('End your turn')
+    expect(w.compactions).toEqual([])
+    await endTurn($)
+    await w.clock.advance(1000)
+    expect(w.compactions).toHaveLength(1)
+    expect(w.files.get(HANDOFF)).toBe('')
+  })
+
+  test('continue in a fresh session: clears, then asks the new session to continue from the handoff', async ($, on) => {
+    const w = world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    await startTurn($)
+    await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 900_000 })
+    expect(await callTool($, { action: 'run', option: 'continue_fresh' })).toContain('End your turn')
+    expect(w.commands).toEqual([])
+    await endTurn($)
+    await w.clock.advance(2000)
+    expect(w.commands).toEqual(['clear'])
+    expect(w.prompts.some(p => p.includes(`read the handoff at ${HANDOFF}`))).toBe(true)
+  })
+
+  test('continue in a fresh session without a handoff asks for one first', async ($, on) => {
+    const w = world(on, { tokens: 120_000 })
+    await startSession($)
+    await startTurn($)
+    await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 900_000 })
+    await callTool($, { action: 'run', option: 'continue_fresh' })
+    await endTurn($)
+    await w.clock.advance(1000)
+    expect(w.prompts.some(p => p.includes('prep-compact'))).toBe(true)
+    expect(w.commands).toEqual([])
+    // Claude writes the handoff during that turn; when it ends, the plugin clears and continues.
+    await startTurn($, 'save the handoff')
+    w.files.set(HANDOFF, DONE)
+    await endTurn($)
+    await w.clock.advance(2000)
+    expect(w.commands).toEqual(['clear'])
+    expect(w.prompts.some(p => p.includes('Continue the work from the previous session'))).toBe(true)
+  })
+
+  test('finish this step: Claude finishes, then the plugin compacts', async ($, on) => {
+    const w = world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    await startTurn($)
+    await callTool($, { action: 'offer', kind: 'handoff', situation: 'delicate_step' })
+    expect(await callTool($, { action: 'run', option: 'finish_step' })).toContain('Finish the current step')
+    await endTurn($)
+    await w.clock.advance(1000)
+    expect(w.compactions).toHaveLength(1)
+  })
+
+  test('/context-manager run works where there are no buttons', async ($, on) => {
+    const w = world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    const out = await $.command.run({ command: 'context-manager', args: 'run snooze', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as never)
+    expect((out as { text?: string }).text).toContain('compaction at 250k')
+    expect(w.files.get(`${ROOT}/.claude/context-manager.json`)).toContain('"prep_at": 230000')
   })
 })

@@ -1,6 +1,6 @@
 ---
 name: configure
-description: Change Claude Context Manager Skill settings (handoff threshold, compaction threshold, safety limit, automatic compaction, context meter, on/off) for this project or for all projects. Use when the user asks to set, change, enable or disable the context manager or its thresholds.
+description: Change Claude Context Manager Skill settings (handoff threshold, compaction threshold, safety limit, automatic compaction, context meter, options picker, pre-flight check, on/off) for this project or for all projects. Use when the user asks to set, change, enable or disable the context manager or its thresholds.
 ---
 
 # Configure Claude Context Manager Skill
@@ -14,7 +14,7 @@ description: Change Claude Context Manager Skill settings (handoff threshold, co
 | Plugin options | `/plugin` → Installed → Claude Context Manager Skill → Configure options | Every project |
 | Defaults | Built in | Fallback |
 
-A key set in a higher layer wins; keys it leaves out fall through to the next layer.
+A key set in a higher layer wins; keys it leaves out fall through to the next layer. A session can also carry its own thresholds, set by the picker's "raise this session's limit" option; they end with the session.
 
 ## Keys
 
@@ -28,6 +28,8 @@ A key set in a higher layer wins; keys it leaves out fall through to the next la
 | `show_meter` | `true` | Show the context meter above the prompt (terminal and desktop app) |
 | `gate_manual` | `true` | A manual `/compact` with no handoff is blocked once; running it again within 2 minutes forces it |
 | `offer_on_startup` | `true` | New sessions are pointed at the latest handoff saved in this project |
+| `offer_options` | `true` | After a handoff, and when planned work may not fit, show the options picker |
+| `preflight_check` | `true` | When Claude plans a set of tasks, it checks they fit before compaction and offers options if not |
 | `handoff_dir` | `.claude/context-manager/handoffs` | Where handoffs are saved, relative to the project root |
 
 Numbers may be written as `150000`, `"150k"` or `"1.2m"`.

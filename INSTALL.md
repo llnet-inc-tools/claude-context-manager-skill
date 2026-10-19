@@ -1,6 +1,6 @@
 # Installing Claude Context Manager Skill
 
-A Claude Code plugin that saves a handoff before your context is compacted, holds compaction until that handoff exists, compacts at your threshold, gives the handoff back to Claude afterwards, and shows a live context meter.
+A Claude Code plugin that saves a handoff before your context is compacted, checks planned work against the context budget, offers the right next step and runs the one you pick, compacts at your threshold, gives the handoff back to Claude afterwards, and shows a live context meter.
 
 ## Requirements
 
@@ -96,6 +96,32 @@ Keep working. Past 20k, the meter turns to `handoff due now`, Claude writes the 
 
 A manual `/compact` with no handoff is blocked once. Run it again within 2 minutes to compact anyway.
 
+## The options picker
+
+When there's a decision to make, the plugin shows a short list of options, with the one Claude recommends first. In the terminal and desktop app they appear as buttons above the prompt: click one, or press its number (`0` dismisses). In VS Code, Claude asks the same question with a multiple-choice prompt. Picking an option runs it; you never need to type the command.
+
+**After a handoff is saved**, Claude judges where the work stands:
+
+| Where the work stands | Recommended | What the option does |
+|---|---|---|
+| Work continues normally | **Keep going** | Compacts automatically at `compact_at` |
+| Partway through a risky step | **Finish this step, then compact** | Claude finishes the step and updates the handoff; then the plugin compacts |
+| Task about done, or switching topics | **Start a fresh session** | Clears the session; the next one is pointed at the handoff |
+| A long task remains | **Continue in a fresh session** | Clears the session and automatically asks the new one to continue from the handoff |
+| | Compact now | Compacts as soon as the current turn ends |
+| | Review the handoff | Claude summarises it and asks what to change |
+| | Snooze | Raises this project's thresholds by 100k |
+
+**Before a set of tasks** (Claude creates a task list, you approve a plan, or you run `/context-manager-skill:plan-check`), Claude estimates how much context the work needs. If it won't fit before compaction, Claude stops and you choose:
+
+| Option | What it does |
+|---|---|
+| **Raise this session's limit** | Raises this session's thresholds to fit the estimate (shown when it fits the model's window). Larger context costs more per turn. Ends with the session |
+| **Continue in a fresh session** | Saves a handoff if needed, clears the session and starts the new one on the work, with a clean context |
+| **Go ahead** | Starts anyway; compaction happens when it's needed |
+
+Options picked while Claude is working run as soon as the current turn ends. Turn the picker off with `offer_options: false`, or just the pre-flight check with `preflight_check: false`.
+
 ## Configure
 
 Ask Claude in plain language:
@@ -125,6 +151,8 @@ Or edit the settings files directly. Higher layers win:
 | `show_meter` | `true` | Context meter above the prompt (terminal and desktop app) |
 | `gate_manual` | `true` | Block a manual `/compact` once when there's no handoff |
 | `offer_on_startup` | `true` | Point new sessions at the latest handoff |
+| `offer_options` | `true` | Show the options picker after a handoff and when planned work may not fit |
+| `preflight_check` | `true` | Check planned work against the context budget before starting it |
 | `handoff_dir` | `.claude/context-manager/handoffs` | Where handoffs are saved |
 
 Numbers can be written as `150000`, `"150k"` or `"1.2m"`. Changes apply from your next message. `/context-manager` shows the value in effect and where it came from.
@@ -134,6 +162,9 @@ Numbers can be written as `150000`, `"150k"` or `"1.2m"`. Changes apply from you
 | Command | What it does |
 |---|---|
 | `/context-manager` | Status: context size, handoff state, effective settings |
+| `/context-manager options` | Show the options picker now |
+| `/context-manager run <option>` | Run an option by name (`auto`, `compact_now`, `finish_step`, `fresh_session`, `continue_fresh`, `expand`, `review`, `snooze`) |
+| `/context-manager-skill:plan-check` | Check whether upcoming work fits before compaction |
 | `/context-manager-skill:prep-compact` | Write a handoff now |
 | `/context-manager-skill:configure` | Show or change settings |
 

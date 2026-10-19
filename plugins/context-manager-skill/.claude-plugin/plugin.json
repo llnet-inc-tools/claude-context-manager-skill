@@ -1,13 +1,21 @@
 {
   "name": "context-manager-skill",
   "displayName": "Claude Context Manager Skill",
-  "version": "2.0.0",
-  "description": "Saves a handoff before context compaction, holds compaction until it exists, compacts at your threshold, restores the handoff afterwards and shows a live context meter. Per-project or global settings. Windows, macOS and Linux.",
-  "author": { "name": "LLnet Inc." },
+  "version": "2.1.0",
+  "description": "Saves a handoff before context compaction, offers the right next step (compact, continue in a fresh session, expand this session's limit) and runs it, checks planned work against the context budget, and shows a live context meter. Per-project or global settings. Windows, macOS and Linux.",
+  "author": {
+    "name": "LLnet Inc."
+  },
   "homepage": "https://github.com/llnet-inc-tools/claude-context-manager-skill",
   "repository": "https://github.com/llnet-inc-tools/claude-context-manager-skill",
   "license": "MIT",
-  "keywords": ["context", "compaction", "handoff", "tokens", "context-window"],
+  "keywords": [
+    "context",
+    "compaction",
+    "handoff",
+    "tokens",
+    "context-window"
+  ],
   "userConfig": {
     "prep_at": {
       "type": "number",
@@ -43,6 +51,18 @@
       "type": "boolean",
       "title": "Show context meter",
       "description": "Show context size and handoff state above the prompt (terminal and desktop app).",
+      "default": true
+    },
+    "offer_options": {
+      "type": "boolean",
+      "title": "Offer options",
+      "description": "After a handoff, and when planned work may not fit, show the options picker (buttons above the prompt, or a question in VS Code).",
+      "default": true
+    },
+    "preflight_check": {
+      "type": "boolean",
+      "title": "Check planned work",
+      "description": "When Claude plans a set of tasks, have it check they fit before compaction and offer options if not.",
       "default": true
     }
   }

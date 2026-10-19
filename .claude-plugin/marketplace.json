@@ -1,0 +1,13 @@
+{
+  "name": "llnet-inc-tools",
+  "description": "LLnet Inc. plugins for Claude Code",
+  "owner": { "name": "LLnet Inc." },
+  "plugins": [
+    {
+      "name": "context-manager-skill",
+      "displayName": "Claude Context Manager Skill",
+      "source": "./plugins/context-manager-skill",
+      "description": "Saves a handoff before compaction, holds auto-compaction until it exists, and restores it afterwards. Thresholds per project or global."
+    }
+  ]
+}

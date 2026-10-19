@@ -1,0 +1,43 @@
+{
+  "name": "context-manager-skill",
+  "displayName": "Claude Context Manager Skill",
+  "version": "1.0.0",
+  "description": "Saves a handoff before context compaction, holds auto-compaction until it exists, restores it afterwards, and carries it into new sessions. Thresholds are configurable per project or globally. Windows (PowerShell).",
+  "author": {
+    "name": "LLnet Inc."
+  },
+  "keywords": [
+    "context",
+    "compaction",
+    "handoff",
+    "tokens"
+  ],
+  "userConfig": {
+    "prep_at": {
+      "type": "number",
+      "title": "Prepare handoff at (tokens)",
+      "description": "Context size at which Claude writes a compaction handoff. A project's .claude/context-manager.json overrides this.",
+      "default": 130000,
+      "min": 10000,
+      "max": 1000000
+    },
+    "compact_at": {
+      "type": "number",
+      "title": "Allow compaction at (tokens)",
+      "description": "Auto-compaction is held below this size. Pair it with the auto-compact trigger (/context-manager-skill:configure can set it).",
+      "default": 150000,
+      "min": 10000,
+      "max": 1000000
+    },
+    "force_at": {
+      "type": "number",
+      "title": "Safety limit (tokens)",
+      "description": "Above this size compaction always runs, handoff or not.",
+      "default": 300000,
+      "min": 10000,
+      "max": 1000000
+    }
+  },
+  "repository": "https://github.com/llnet-inc-tools/claude-context-manager-skill",
+  "homepage": "https://github.com/llnet-inc-tools/claude-context-manager-skill"
+}

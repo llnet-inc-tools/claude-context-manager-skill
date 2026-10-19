@@ -1,15 +1,19 @@
 # update-and-enable-autoupdate.ps1
 # Claude Context Manager Skill: update to the latest version and turn on auto-update.
 #
-# Run it (Windows): right-click the file > Run with PowerShell
-#   or: powershell -NoProfile -ExecutionPolicy Bypass -File .\update-and-enable-autoupdate.ps1
-# Also runs on macOS/Linux with PowerShell 7: pwsh ./update-and-enable-autoupdate.ps1
+# Easiest (Windows): open PowerShell and paste
+#   irm https://raw.githubusercontent.com/llnet-inc-tools/claude-context-manager-skill/main/scripts/update-and-enable-autoupdate.ps1 | iex
+# Or download it and right-click > Run with PowerShell (the window waits for Enter before closing).
+# macOS/Linux with PowerShell 7: pwsh ./update-and-enable-autoupdate.ps1
+# A log of each run is saved to context-manager-update.log in your temp folder.
 #
 # What it does, on this computer only:
 #   1. Refreshes the llnet-inc-tools marketplace and updates the plugin (installs it if missing)
 #   2. Sets "autoUpdate": true for llnet-inc-tools in your Claude Code user settings (backup kept)
 #   3. Offers to remove the old "context-guard" test plugin if it is still installed
 # The terminal, the desktop app's Code tab and the IDE extensions share these settings.
+
+param([switch]$NoPause)
 
 $ErrorActionPreference = 'Stop'
 try { Remove-TypeData System.Array -ErrorAction Stop } catch { }   # PowerShell 5.1 JSON array quirk
@@ -23,17 +27,23 @@ function Ok([string]$text)   { Write-Host "   $text" -ForegroundColor Green }
 function Note([string]$text) { Write-Host "   $text" -ForegroundColor Yellow }
 
 function Invoke-Claude([string[]]$arguments) {
-    $out = & claude @arguments 2>&1 | Out-String
-    return @{ code = $LASTEXITCODE; text = $out.Trim() }
+    # Windows PowerShell 5.1 turns a native command's stderr into errors, which 'Stop' would make fatal.
+    $ErrorActionPreference = 'Continue'
+    $lines = & claude @arguments 2>&1 | ForEach-Object { "$_" }
+    $code = $LASTEXITCODE
+    return @{ code = $code; text = (($lines | Out-String).Trim()) }
 }
 
-function Pause-IfDoubleClicked {
-    if ($Host.Name -eq 'ConsoleHost' -and [Environment]::GetCommandLineArgs() -match '-File') {
-        Write-Host ''; Read-Host 'Press Enter to close' | Out-Null
+# Run as a file (double-click, Run with PowerShell): keep the window open. Pasted with iex: don't.
+$RunAsFile = [bool]$PSCommandPath
+function Wait-BeforeClose {
+    if ($RunAsFile -and -not $NoPause) {
+        Write-Host ''
+        try { Read-Host 'Press Enter to close' | Out-Null } catch { }
     }
 }
 
-try {
+function Invoke-Main {
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
         throw "The 'claude' command wasn't found. Install Claude Code (https://code.claude.com) or open a new terminal, then run this again."
     }
@@ -116,10 +126,20 @@ try {
     Write-Host ''
     Write-Host '   Fully quit the Claude app (including from the system tray) and reopen it,' -ForegroundColor Green
     Write-Host '   then run /context-manager in a new Code-tab session to check the version.' -ForegroundColor Green
+}
+
+$log = Join-Path ([IO.Path]::GetTempPath()) 'context-manager-update.log'
+try { Start-Transcript -Path $log -Force | Out-Null } catch { }
+$failed = $false
+try {
+    Invoke-Main
 } catch {
+    $failed = $true
     Write-Host ''
     Write-Host "   $($_.Exception.Message)" -ForegroundColor Red
-    Pause-IfDoubleClicked
-    exit 1
 }
-Pause-IfDoubleClicked
+Write-Host ''
+Write-Host "   Log saved to $log" -ForegroundColor DarkGray
+try { Stop-Transcript | Out-Null } catch { }
+Wait-BeforeClose
+if ($failed -and $RunAsFile) { exit 1 }

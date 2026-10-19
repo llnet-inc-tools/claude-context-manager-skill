@@ -1,8 +1,8 @@
 {
   "name": "context-manager-skill",
   "displayName": "Claude Context Manager Skill",
-  "version": "2.1.0",
-  "description": "Saves a handoff before context compaction, offers the right next step (compact, continue in a fresh session, expand this session's limit) and runs it, checks planned work against the context budget, and shows a live context meter. Per-project or global settings. Windows, macOS and Linux.",
+  "version": "2.2.0",
+  "description": "Saves a handoff before context compaction, checks planned work against the context budget, offers the right next step (compact, continue in a fresh session, raise this session's limit, use subagents) with your usage limits in mind, guards stale resumes, warns on large reads and shows a live context meter. Per-project or global settings. Windows, macOS and Linux.",
   "author": {
     "name": "LLnet Inc."
   },
@@ -64,6 +64,52 @@
       "title": "Check planned work",
       "description": "When Claude plans a set of tasks, have it check they fit before compaction and offer options if not.",
       "default": true
+    },
+    "usage_aware": {
+      "type": "boolean",
+      "title": "Mind my usage limits",
+      "description": "When your 5-hour or weekly limit is getting full, recommend the option that uses less first and show the limit in the meter.",
+      "default": true
+    },
+    "limit_pressure_at": {
+      "type": "number",
+      "title": "Usage limit warning point (%)",
+      "description": "How full a usage limit gets before cheaper options are recommended first.",
+      "default": 80,
+      "min": 1,
+      "max": 100
+    },
+    "stale_guard": {
+      "type": "boolean",
+      "title": "Offer a fresh start on stale resumes",
+      "description": "When you reopen a large session whose cache has expired, offer to continue in a fresh session instead of re-sending everything.",
+      "default": true
+    },
+    "check_handoff_quality": {
+      "type": "boolean",
+      "title": "Check handoff quality",
+      "description": "A handoff only counts as saved once its Goal, Current status and Next steps sections have content.",
+      "default": true
+    },
+    "check_updates": {
+      "type": "boolean",
+      "title": "Check for updates",
+      "description": "Check GitHub at most twice a day and say when a newer version is available.",
+      "default": true
+    },
+    "track_stats": {
+      "type": "boolean",
+      "title": "Keep project stats",
+      "description": "Count sessions, handoffs, compactions and large reads per project, shown in /context-manager.",
+      "default": true
+    },
+    "warn_large_reads": {
+      "type": "number",
+      "title": "Warn on large tool results (tokens)",
+      "description": "Show a notice when one tool result adds at least this many tokens of context. 0 turns it off.",
+      "default": 25000,
+      "min": 0,
+      "max": 1000000
     }
   }
 }

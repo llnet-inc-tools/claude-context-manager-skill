@@ -30,6 +30,13 @@ A key set in a higher layer wins; keys it leaves out fall through to the next la
 | `offer_on_startup` | `true` | New sessions are pointed at the latest handoff saved in this project |
 | `offer_options` | `true` | After a handoff, and when planned work may not fit, show the options picker |
 | `preflight_check` | `true` | When Claude plans a set of tasks, it checks they fit before compaction and offers options if not |
+| `usage_aware` | `true` | Near a usage limit, recommend the option that uses less first; show the limit in the meter |
+| `limit_pressure_at` | `80` | Percent of a 5-hour or weekly limit at which `usage_aware` kicks in |
+| `stale_guard` | `true` | Offer a fresh start when a large resumed session's cache has expired |
+| `check_handoff_quality` | `true` | A handoff only counts once Goal, Current status and Next steps have content |
+| `check_updates` | `true` | Check GitHub at most twice a day and say when a newer version is out |
+| `track_stats` | `true` | Keep per-project counts shown in `/context-manager` |
+| `warn_large_reads` | `25000` | Notice when one tool result adds at least this many tokens; `0` turns it off |
 | `handoff_dir` | `.claude/context-manager/handoffs` | Where handoffs are saved, relative to the project root |
 
 Numbers may be written as `150000`, `"150k"` or `"1.2m"`.

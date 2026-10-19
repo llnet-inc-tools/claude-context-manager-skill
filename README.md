@@ -5,12 +5,13 @@
 
 A Claude Code plugin that keeps long sessions from being compacted out from under you, and keeps them small enough to stay cheap.
 
-1. **Check before big work.** When Claude plans a set of tasks, it estimates whether they fit before compaction. If not, you choose: raise this session's limit, continue in a fresh session that picks up automatically, or go ahead anyway.
+1. **Check before big work.** When Claude plans a set of tasks, it estimates whether they fit before compaction. If not, you choose: send the reading to subagents, raise this session's limit, continue in a fresh session that picks up automatically, or go ahead anyway.
 2. **Prepare.** At 130k tokens, Claude writes a handoff (goal, status, decisions, key files, next steps).
-3. **Offer the right next step.** Claude judges where the work stands and you get a short list of options, recommended one first: keep going, compact now, finish this step then compact, start fresh, continue in a fresh session, review the handoff, or snooze. Picking one runs it.
+3. **Offer the right next step.** Claude judges where the work stands and you get a short list of options, recommended one first: keep going, raise this session's limit (when only a little work is left), compact now, finish this step then compact, start fresh, continue in a fresh session, review the handoff, or snooze. Picking one runs it. Near your 5-hour or weekly limit, the option that uses less is recommended first.
 4. **Gate and compact.** Compaction is held below 150k and until the handoff is complete, then runs on its own after the turn. Above 300k it always runs, as a safety valve.
-5. **Restore and carry over.** After compaction the handoff is given back to Claude, and a new session in the same project is pointed at it.
-6. **See it.** A live meter above the prompt shows context size and handoff state, and holds the option buttons when there's a choice to make:
+5. **Restore and carry over.** After compaction the handoff is given back to Claude, and a new session in the same project is pointed at it. Reopen a big session whose cache has expired and you're offered a fresh start from the handoff instead of re-sending everything at full price.
+6. **Guard rails.** Handoffs only count once Goal, Status and Next steps have content; one oversized tool result triggers a notice; `/context-manager` shows per-project stats and tells you when an update is out.
+7. **See it.** A live meter above the prompt shows context size and handoff state, and holds the option buttons when there's a choice to make:
    ```
    Context 142k / 1M (14%) · handoff saved · compact at 150k
    Mid-migration; finish the schema change first. How do you want to continue?
@@ -50,9 +51,9 @@ Requires a recent Claude Code (tested with 2.1.303). Update with `claude update`
 
 | Command | What it does |
 |---|---|
-| `/context-manager` | Status: context size, handoff state, and every setting with where it comes from |
+| `/context-manager` | Status: context size, handoff state, usage limits, update availability, project stats, and every setting with where it comes from |
 | `/context-manager options` | Show the options picker now |
-| `/context-manager run <option>` | Run an option by name: `auto`, `compact_now`, `finish_step`, `fresh_session`, `continue_fresh`, `expand`, `review`, `snooze` |
+| `/context-manager run <option>` | Run an option by name: `auto`, `compact_now`, `finish_step`, `fresh_session`, `continue_fresh`, `expand`, `delegate`, `review`, `snooze` |
 | `/context-manager-skill:plan-check` | Check whether the work you're about to start fits before compaction |
 | `/context-manager-skill:prep-compact` | Write a handoff now |
 | `/context-manager-skill:configure` | Change settings in plain language, e.g. *"for this project, prep at 250k and compact at 280k"* |
@@ -68,7 +69,7 @@ Highest priority first:
 | Plugin options | `/plugin` → **Installed** → Claude Context Manager Skill → **Configure options** |
 | Defaults | prep 130k · compact 150k · safety 300k |
 
-Keys: `enabled`, `prep_at`, `compact_at`, `force_at`, `auto_compact`, `show_meter`, `offer_options`, `preflight_check`, `gate_manual`, `offer_on_startup`, `handoff_dir`. Numbers can be `150000` or `"150k"`. [INSTALL.md](INSTALL.md#configure) describes each one.
+Keys: `enabled`, `prep_at`, `compact_at`, `force_at`, `auto_compact`, `show_meter`, `offer_options`, `preflight_check`, `usage_aware`, `limit_pressure_at`, `stale_guard`, `check_handoff_quality`, `check_updates`, `track_stats`, `warn_large_reads`, `gate_manual`, `offer_on_startup`, `handoff_dir`. Numbers can be `150000` or `"150k"`. [INSTALL.md](INSTALL.md#configure) describes each one.
 
 ## Updates and versioning
 

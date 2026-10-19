@@ -9,7 +9,7 @@
       "name": "context-manager-skill",
       "displayName": "Claude Context Manager Skill",
       "source": "./plugins/context-manager-skill",
-      "description": "Saves a handoff before compaction, checks planned work against the context budget, offers the right next step (compact, continue in a fresh session, raise this session's limit) and runs it, with a live context meter. Windows, macOS and Linux."
+      "description": "Saves a handoff before compaction, checks planned work against the context budget, offers the right next step (compact, continue fresh, raise this session's limit, use subagents) with your usage limits in mind, guards stale resumes, and shows a live context meter. Windows, macOS and Linux."
     }
   ]
 }

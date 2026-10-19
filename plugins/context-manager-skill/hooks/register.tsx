@@ -9,12 +9,28 @@
 //   tool.call        serves the context_manager tool; adds a context budget when tasks are planned
 //   session.start    registers /context-manager and the tool; points new sessions at the latest handoff
 //   ui.render        draws the context meter and, when there is a choice to make, the options picker
+//   classic.SessionStart  offers a fresh start when a resumed session's cache has expired
 
 import type { EngineInterface, Register } from 'claude-code'
 
 import {
   ACTION_HELP,
+  DELEGATE_PROMPT,
+  UPDATE_CHECK_EVERY_MS,
   type ActionId,
+  type Stats,
+  compareVersions,
+  emptyStats,
+  estimateTokens,
+  gapsNote,
+  handoffGaps,
+  isStaleResume,
+  pressureOf,
+  rawManifestUrl,
+  staleNote,
+  staleReason,
+  statsLines,
+  updateNotice,
   type HandoffState,
   type Offer,
   type OfferKind,
@@ -59,6 +75,11 @@ const TOOL = 'context_manager'
 const PLANNING_TOOLS = new Set(['TaskCreate', 'TodoWrite', 'ExitPlanMode'])
 const restoreKey = (sid: string) => `restore:${sid}`
 const sessionKey = (sid: string) => `session:${sid}`
+const statsKey = (root: string) => `stats:${root.replace(/\\/g, '/').toLowerCase()}`
+const UPDATE_KEY = 'update-check'
+const MARKETPLACE = 'llnet-inc-tools'
+const PLUGIN_DIR_IN_REPO = 'plugins/context-manager-skill'
+const LARGE_READ_FLOOR = 5_000 // below this, don't even load settings
 
 const PREP_PROMPT =
   'Run the context-manager-skill:prep-compact skill now to save the compaction handoff for this session, then stop.'
@@ -84,6 +105,10 @@ const mem = {
   isFinishTurn: false,
   pendingContinue: undefined as string | undefined, // the prompt a cleared session starts with
   toolName: undefined as string | undefined,
+  staleNote: undefined as string | undefined, // for surfaces without buttons: Claude asks instead
+  handoffCounted: false,
+  version: undefined as string | undefined,
+  updateLatest: undefined as string | undefined,
 }
 
 async function readText($: $, path: string): Promise<string | undefined> {
@@ -124,16 +149,73 @@ async function ensureHandoffDir($: $, dir: string): Promise<void> {
 
 async function snapshot($: $, options: Opts) {
   const st = await load($, options)
-  const { context } = await $.session.usage()
+  const usage = await $.session.usage()
+  const context = usage.context
   const path = handoffFile(st.root, st.values, st.sid)
-  const state: HandoffState = handoffState(await readText($, path))
+  const text = await readText($, path)
+  const state: HandoffState = handoffState(text, st.values.check_handoff_quality)
   const tokens = mem.isJustCompacted ? undefined : context.tokens
-  return { st, s: st.values, sid: st.sid, path, state, tokens, window: context.window }
+  const pressure = pressureOf(usage.rateLimits, st.values)
+  return { st, s: st.values, sid: st.sid, path, text, state, tokens, window: context.window, pressure }
+}
+
+async function bumpStats($: $, root: string, change: (st: Stats) => void): Promise<void> {
+  try {
+    const key = statsKey(root)
+    const raw = await $.store.get(key)
+    const st: Stats = { ...emptyStats(await $.clock.now()), ...(raw && typeof raw === 'object' ? (raw as Partial<Stats>) : {}) }
+    change(st)
+    await $.store.set(key, st)
+  } catch {
+    /* stats are best-effort */
+  }
+}
+
+async function localManifest($: $): Promise<{ version?: string; repository?: string }> {
+  try {
+    const m = JSON.parse((await readText($, joinPath($.plugin.root, '.claude-plugin', 'plugin.json'))) ?? '{}')
+    return { version: typeof m.version === 'string' ? m.version : undefined, repository: typeof m.repository === 'string' ? m.repository : undefined }
+  } catch {
+    return {}
+  }
+}
+
+// Checks GitHub at most twice a day for a newer release; tells the user once per session.
+async function checkForUpdate($: $): Promise<void> {
+  const { version, repository } = await localManifest($)
+  mem.version = version
+  const url = rawManifestUrl(repository, PLUGIN_DIR_IN_REPO)
+  if (!version || !url) return
+  const now = await $.clock.now()
+  const cached = (await $.store.get(UPDATE_KEY)) as { checkedAt?: number; latest?: string } | undefined
+  let latest = cached?.latest
+  if (!cached?.checkedAt || now - cached.checkedAt >= UPDATE_CHECK_EVERY_MS) {
+    try {
+      const res = await $.http.fetch(url)
+      if (res.ok) {
+        const remote = JSON.parse(res.text) as { version?: unknown }
+        if (typeof remote.version === 'string') latest = remote.version
+      }
+    } catch {
+      /* offline or blocked: try again next time */
+    }
+    await $.store.set(UPDATE_KEY, { checkedAt: now, latest })
+  }
+  if (latest && compareVersions(latest, version) > 0) {
+    mem.updateLatest = latest
+    $.ui.toast(updateNotice(latest, version, MARKETPLACE), { timeoutMs: 12_000 })
+  }
+}
+
+async function hasButtons($: $): Promise<boolean> {
+  const surfaces = await $.session.surfaces()
+  return surfaces.some(x => x === 'terminal' || x === 'desktop')
 }
 
 // After a compaction: archive the handoff and queue it for the next prompt. Idempotent.
 async function afterCompaction($: $, s: Settings, root: string, sid: string): Promise<void> {
   mem.offer = undefined
+  mem.handoffCounted = false
   const path = handoffFile(root, s, sid)
   const text = await readText($, path)
   if (handoffState(text) !== 'complete' || text === undefined) return
@@ -154,6 +236,12 @@ async function compactNow($: $, options: Opts): Promise<boolean> {
     if (outcome.skip !== undefined) return false
     mem.isJustCompacted = true
     await afterCompaction($, s, st.root, sid)
+    if (s.track_stats) {
+      await bumpStats($, st.root, x => {
+        x.compactions += 1
+        if (outcome.tokensBefore !== undefined && outcome.tokensAfter !== undefined) x.trimmed += Math.max(0, outcome.tokensBefore - outcome.tokensAfter)
+      })
+    }
     return true
   } finally {
     mem.isCompactScheduled = false
@@ -194,6 +282,7 @@ async function runIdle($: $, options: Opts, action: ActionId): Promise<void> {
     if (state === 'complete') mem.pendingStartup = startupNote(path, 'just now')
     await clearSession($)
   } else if (action === 'continue_fresh') {
+    if (s.track_stats) await bumpStats($, st.root, x => (x.freshContinues += 1))
     mem.pendingContinue = continuePrompt(path)
     await clearSession($)
     // session.end (reason "clear") usually sends it first; this covers a /clear that raised no session.end.
@@ -223,10 +312,18 @@ async function runAction($: $, options: Opts, action: ActionId, via: 'button' | 
       if (target === undefined) return 'There is no estimate to size the expansion; offer the options again with estimate_tokens.'
       const current = (await $.store.get(sessionKey(sid))) as Record<string, unknown> | undefined
       await $.store.set(sessionKey(sid), { ...(current ?? {}), ...expandedSettings(target, s) })
+      if (s.track_stats) await bumpStats($, st.root, x => (x.expands += 1))
       mem.offer = undefined
       if (resume) await $.prompt.submit({ text: GO_PROMPT, asUser: true })
       $.ui.invalidate('ui.render')
-      return `This session's compaction threshold is now ${formatK(target)} (this session only). Go ahead with the tasks.`
+      return `This session's compaction threshold is now ${formatK(target)} (this session only). Carry on with the work.`
+    }
+    case 'delegate': {
+      mem.offer = undefined
+      $.ui.invalidate('ui.render')
+      if (via === 'tool') return `Go ahead: ${DELEGATE_PROMPT.charAt(0).toLowerCase()}${DELEGATE_PROMPT.slice(1)}`
+      await $.prompt.submit({ text: DELEGATE_PROMPT, asUser: true })
+      return 'Claude will go ahead, with subagents doing the reading.'
     }
     case 'snooze': {
       const project = parseJsonFile((await readText($, st.projectPath)) ?? '', 'project').value
@@ -272,14 +369,24 @@ async function runAction($: $, options: Opts, action: ActionId, via: 'button' | 
 async function offerOptions(
   $: $,
   options: Opts,
-  args: { kind: OfferKind; situation: unknown; recommended?: unknown; reason?: unknown; estimate?: unknown },
+  args: { kind: OfferKind; situation: unknown; recommended?: unknown; reason?: unknown; estimate?: unknown; readHeavy?: unknown },
 ): Promise<string> {
-  const { s, tokens, window, state } = await snapshot($, options)
+  const { s, tokens, window, state, pressure } = await snapshot($, options)
   if (!s.enabled) return 'The context manager is turned off here; carry on.'
   if (!s.offer_options) return 'The user has turned the options picker off; carry on with the default behaviour.'
   if (args.kind === 'handoff' && state !== 'complete') {
-    return 'The handoff is not complete yet. Finish writing it (ending with the marker line), then offer the options.'
+    return state === 'incomplete'
+      ? 'The handoff has its end marker but is missing a Goal, Current status or Next steps section. Fill those in, then offer the options.'
+      : 'The handoff is not complete yet. Finish writing it (ending with the marker line), then offer the options.'
   }
+  if (args.kind === 'resume' && mem.offer?.kind === 'resume') {
+    const offer = mem.offer
+    const choices = offerChoicesText(offer, s)
+    return (await hasButtons($))
+      ? `The options are shown to the user as buttons above the prompt:\n${choices}\nTell the user in one line what you recommend.`
+      : `Ask the user with AskUserQuestion, these options in this order, the first labelled "(Recommended)":\n${choices}\nThen call ${mem.toolName ?? TOOL} with action "run" and their choice.`
+  }
+  if (args.kind === 'resume') return 'There is nothing to offer for this session; carry on.'
   const situation = isSituation(args.situation) ? args.situation : args.kind === 'preflight' ? 'preflight_overflow' : 'mid_task'
   const estimate = typeof args.estimate === 'number' && args.estimate > 0 ? Math.round(args.estimate) : undefined
   const offer = buildOffer({
@@ -288,21 +395,22 @@ async function offerOptions(
     recommended: isActionId(args.recommended) ? args.recommended : undefined,
     reason: typeof args.reason === 'string' ? args.reason : undefined,
     estimate,
+    readHeavy: args.readHeavy === true,
     tokens,
     window,
     s,
     now: await $.clock.now(),
+    pressure,
   })
   mem.offer = offer
   $.ui.invalidate('ui.render')
-  const surfaces = await $.session.surfaces()
-  const hasButtons = surfaces.some(x => x === 'terminal' || x === 'desktop')
+  const buttons = await hasButtons($)
   const choices = offerChoicesText(offer, s)
   const wait =
     offer.kind === 'preflight'
       ? 'Do not start the tasks until the user has chosen.'
       : 'Then carry on with what the user asked; if they pick nothing, the default (option 1) applies.'
-  if (hasButtons) {
+  if (buttons) {
     return (
       `The options are now shown to the user as buttons above the prompt:\n${choices}\n` +
       `Tell the user in one line which option you recommend and why. ${wait} ` +
@@ -329,24 +437,29 @@ export const register: Register = (on, options) => {
         name: TOOL,
         description:
           'Claude Context Manager Skill. action "offer": show the user context-management options, after writing a ' +
-          'compaction handoff (kind "handoff") or before planned work that may not fit before compaction (kind ' +
-          '"preflight", with estimate_tokens). action "run": run the option the user chose.',
+          'compaction handoff (kind "handoff", with estimate_tokens for the work left), before planned work that may ' +
+          'not fit before compaction (kind "preflight", with estimate_tokens and read_heavy), or when a resumed ' +
+          'session\'s cache expired (kind "resume"). action "run": run the option the user chose.',
         inputSchema: {
           type: 'object',
           properties: {
             action: { type: 'string', enum: ['offer', 'run'] },
-            kind: { type: 'string', enum: ['handoff', 'preflight'] },
+            kind: { type: 'string', enum: ['handoff', 'preflight', 'resume'] },
             situation: {
               type: 'string',
-              enum: ['mid_task', 'near_done', 'delicate_step', 'topic_switch', 'preflight_overflow'],
+              enum: ['mid_task', 'near_done', 'delicate_step', 'topic_switch', 'preflight_overflow', 'stale_resume'],
               description: 'mid_task: work continues; near_done: almost finished; delicate_step: in the middle of a risky step; topic_switch: the user is moving to something else; preflight_overflow: planned work will not fit',
             },
             recommended: {
               type: 'string',
-              enum: ['auto', 'compact_now', 'finish_step', 'fresh_session', 'continue_fresh', 'expand', 'review', 'snooze'],
+              enum: ['auto', 'compact_now', 'finish_step', 'fresh_session', 'continue_fresh', 'expand', 'delegate', 'review', 'snooze'],
             },
             reason: { type: 'string', description: 'One short sentence shown to the user.' },
-            estimate_tokens: { type: 'number', description: 'preflight: tokens of context the planned work will add' },
+            estimate_tokens: {
+              type: 'number',
+              description: 'preflight: tokens of context the planned work will add; handoff: tokens the rest of the current task will add',
+            },
+            read_heavy: { type: 'boolean', description: 'preflight: most of the estimate is reading or searching files' },
             option: { type: 'string', description: 'run: the option id the user chose' },
           },
           required: ['action'],
@@ -355,6 +468,14 @@ export const register: Register = (on, options) => {
       mem.toolName = registered.tool
       const st = await load($, options)
       const s = st.values
+      if (s.enabled && s.track_stats) await bumpStats($, st.root, x => (x.sessions += 1))
+      if (s.enabled && s.check_updates) {
+        $.clock.after(3000, () => {
+          void checkForUpdate($).catch(() => undefined)
+        })
+      } else {
+        mem.version = (await localManifest($)).version
+      }
       if (s.enabled && s.offer_on_startup) {
         const dir = handoffDir(st.root, s)
         if (await $.fs.exists(dir)) {
@@ -373,6 +494,33 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // A resumed session whose prompt cache expired: offer a fresh start before the costly first message.
+  on('classic.SessionStart', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const { s, tokens, window, pressure } = await snapshot($, options)
+      if (s.offer_options && isStaleResume(e, s)) {
+        const reason = staleReason(e)
+        mem.offer = buildOffer({
+          kind: 'resume',
+          situation: 'stale_resume',
+          reason,
+          tokens,
+          window,
+          s,
+          now: await $.clock.now(),
+          pressure,
+          resendTokens: e.context_tokens,
+        })
+        mem.staleNote = staleNote(reason, mem.toolName ?? `mcp__context-manager-skill__${TOOL}`)
+        $.ui.invalidate('ui.render')
+      }
+    } catch (err) {
+      $.ui.log(`classic.SessionStart: ${String(err)}`)
+    }
+    return result
+  }).catch(($, e, next) => next(e)) // never get in the way of a session starting
+
   // A /clear: the session the picker cleared starts with its continuation prompt.
   on('session.end', async ($, e, next) => {
     const result = await next(e)
@@ -390,6 +538,12 @@ export const register: Register = (on, options) => {
     try {
       const snap = await snapshot($, options)
       const { s, sid, path, state, tokens } = snap
+      if (mem.offer?.kind === 'resume') {
+        // The user carried on in this session: the first message warms the cache again.
+        if (mem.staleNote && !(await hasButtons($))) extra.push(mem.staleNote)
+        else mem.offer = undefined
+        mem.staleNote = undefined
+      }
       if (s.enabled) {
         const restore = await $.store.get(restoreKey(sid))
         if (typeof restore === 'string') {
@@ -401,13 +555,16 @@ export const register: Register = (on, options) => {
           mem.pendingStartup = undefined
         }
         if (tokens !== undefined && tokens >= s.prep_at && typeof restore !== 'string') {
-          if (state !== 'complete') {
+          if (state === 'incomplete') {
+            extra.push(gapsNote(path, handoffGaps(snap.text ?? '')))
+          } else if (state !== 'complete') {
             await ensureHandoffDir($, handoffDir(snap.st.root, s))
             extra.push(prepNote(tokens, s, path))
             if (s.offer_options && mem.toolName) {
               extra.push(
                 `Once the handoff is saved, call ${mem.toolName} with action "offer", kind "handoff", the situation ` +
-                  `that fits the work and a one-sentence reason, so the user can pick how to continue.`,
+                  `that fits the work, a one-sentence reason and, when the current task isn't finished, estimate_tokens ` +
+                  `for the context the rest of it will add, so the user can pick how to continue.`,
               )
             }
             $.ui.toast(`Context at ~${formatK(tokens)}. Claude will save a handoff before compacting.`)
@@ -465,6 +622,12 @@ export const register: Register = (on, options) => {
     mem.isJustCompacted = true
     try {
       if (s.enabled) await afterCompaction($, s, st.root, sid)
+      if (s.enabled && s.track_stats) {
+        await bumpStats($, st.root, x => {
+          x.compactions += 1
+          if (result.tokensBefore !== undefined && result.tokensAfter !== undefined) x.trimmed += Math.max(0, result.tokensBefore - result.tokensAfter)
+        })
+      }
       if (decision.reason) $.ui.toast(decision.reason)
     } catch (err) {
       $.ui.log(`after compaction: ${String(err)}`)
@@ -483,8 +646,16 @@ export const register: Register = (on, options) => {
     $.ui.invalidate('ui.render')
     if (e.isAborted || mem.isCompactScheduled) return result
     try {
-      const { s, state, tokens } = await snapshot($, options)
+      const { s, state, tokens, st } = await snapshot($, options)
       if (!s.enabled) return result
+      if (s.track_stats) {
+        const countHandoff = state === 'complete' && !mem.handoffCounted
+        if (countHandoff) mem.handoffCounted = true
+        await bumpStats($, st.root, x => {
+          if (tokens !== undefined) x.peak = Math.max(x.peak, tokens)
+          if (countHandoff) x.handoffs += 1
+        })
+      }
 
       // 1. An option picked while the turn ran, or one waiting for the handoff Claude just wrote.
       let action = mem.pendingAction
@@ -535,7 +706,7 @@ export const register: Register = (on, options) => {
           if (!isActionId(option)) return { result: `Unknown option ${JSON.stringify(option)}.` }
           return { result: await runAction($, options, option, 'tool') }
         }
-        const kind: OfferKind = input.kind === 'preflight' ? 'preflight' : 'handoff'
+        const kind: OfferKind = input.kind === 'preflight' ? 'preflight' : input.kind === 'resume' ? 'resume' : 'handoff'
         return {
           result: await offerOptions($, options, {
             kind,
@@ -543,6 +714,7 @@ export const register: Register = (on, options) => {
             recommended: input.recommended,
             reason: input.reason,
             estimate: input.estimate_tokens,
+            readHeavy: input.read_heavy,
           }),
         }
       } catch (err) {
@@ -551,6 +723,23 @@ export const register: Register = (on, options) => {
     }
 
     const result = await next(e)
+
+    // A single tool result that adds a lot of context: tell the user.
+    if (e.agentId === undefined && result.deny === undefined && typeof result.text === 'string') {
+      const added = estimateTokens(result.text)
+      if (added >= LARGE_READ_FLOOR) {
+        try {
+          const { s, st } = await snapshot($, options)
+          if (s.enabled && s.warn_large_reads > 0 && added >= s.warn_large_reads) {
+            $.ui.toast(`${String(e.tool)} just added ~${formatK(added)} tokens of context.`, { timeoutMs: 6000 })
+            if (s.track_stats) await bumpStats($, st.root, x => (x.largeReads += 1))
+          }
+        } catch {
+          /* warnings are best-effort */
+        }
+      }
+    }
+
     // A task list or an approved plan: give Claude the context budget once per turn.
     if (!PLANNING_TOOLS.has(String(e.tool)) || e.agentId !== undefined || result.deny !== undefined || result.isError) return result
     try {
@@ -580,23 +769,26 @@ export const register: Register = (on, options) => {
         return { text: await runAction($, options, option, 'command') }
       }
 
-      const { st, s, path, state, tokens, window } = await snapshot($, options)
-      let version = '?'
-      try {
-        const manifest = JSON.parse((await readText($, joinPath($.plugin.root, '.claude-plugin', 'plugin.json'))) ?? '{}')
-        if (typeof manifest.version === 'string') version = manifest.version
-      } catch {
-        /* keep '?' */
-      }
+      const { st, s, path, text, state, tokens, window, pressure } = await snapshot($, options)
+      const version = mem.version ?? (await localManifest($)).version ?? '?'
       const engine = (await $.session.version()).version
       const phase = phaseOf(tokens, state, s)
       const handoffLine =
-        state === 'complete' ? `saved: ${path}` : state === 'started' ? `started, not finished: ${path}` : 'not written yet'
+        state === 'complete'
+          ? `saved: ${path}`
+          : state === 'incomplete'
+            ? `missing ${handoffGaps(text ?? '').join(', ')}: ${path}`
+            : state === 'started'
+              ? `started, not finished: ${path}`
+              : 'not written yet'
+      const statsRaw = s.track_stats ? await $.store.get(statsKey(st.root)) : undefined
       const nextLine =
         phase === 'below-prep' && tokens !== undefined
           ? `handoff at ${formatK(s.prep_at)} (${formatK(s.prep_at - tokens)} to go)`
           : phase === 'handoff-due'
             ? 'handoff due: Claude writes it on your next message'
+            : phase === 'handoff-incomplete'
+              ? 'Claude fills in the handoff\'s missing sections on your next message'
             : phase === 'ready-below-compact'
               ? `handoff saved; compaction allowed from ${formatK(s.compact_at)}`
               : phase === 'ready-to-compact'
@@ -613,9 +805,12 @@ export const register: Register = (on, options) => {
         `  Handoff   ${handoffLine}`,
         ...(mem.offer ? [`  Options   waiting for your pick: ${mem.offer.actions.map(a => actionLabel(a, mem.offer, s)).join(' | ')}`] : []),
         ...(mem.pendingAction ? [`  Queued    ${actionLabel(mem.pendingAction, mem.offer, s)} (after this turn)`] : []),
+        ...(pressure ? [`  Usage     ${pressure.label} limit ${pressure.percent}% used${pressure.isHigh ? ' (cheaper options recommended first)' : ''}`] : []),
+        ...(mem.updateLatest ? [`  Update    ${mem.updateLatest} is available: /plugin marketplace update ${MARKETPLACE}, then update the plugin`] : []),
+        ...(statsRaw && typeof statsRaw === 'object' ? ['', 'This project', ...statsLines({ ...emptyStats(0), ...(statsRaw as Partial<Stats>) })] : []),
         '',
         'Settings',
-        ...KEYS.map(k => `  ${k.padEnd(width)}  ${formatValue(s[k]).padEnd(34)} ${st.sources[k]}`),
+        ...KEYS.map(k => `  ${k.padEnd(width)}  ${formatValue(s[k], k).padEnd(34)} ${st.sources[k]}`),
         '',
         `  Project file  ${st.projectPath}`,
         `  User file     ${st.userPath ?? '(home folder not found)'}`,
@@ -631,14 +826,14 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey) return next(e)
     let view: { text: string; color?: 'warning' | 'success'; offer?: Offer; s: Settings }
     try {
-      const { s, state, tokens, window } = await snapshot($, options)
+      const { s, state, tokens, window, pressure } = await snapshot($, options)
       if (!s.enabled) return next(e)
       const offer = s.offer_options ? mem.offer : undefined
       if (!s.show_meter && !offer) return next(e)
       const phase = phaseOf(tokens, state, s)
       view = {
-        text: meterText(tokens, window, phase, s),
-        color: phase === 'handoff-due' ? 'warning' : phase === 'ready-to-compact' ? 'success' : undefined,
+        text: meterText(tokens, window, phase, s, pressure),
+        color: phase === 'handoff-due' || phase === 'handoff-incomplete' || pressure?.isHigh ? 'warning' : phase === 'ready-to-compact' ? 'success' : undefined,
         offer,
         s,
       }

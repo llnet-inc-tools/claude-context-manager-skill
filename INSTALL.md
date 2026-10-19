@@ -124,6 +124,7 @@ When there's a decision to make, the plugin shows a short list of options, with 
 | Partway through a risky step | **Finish this step, then compact** | Claude finishes the step and updates the handoff; then the plugin compacts |
 | Task about done, or switching topics | **Start a fresh session** | Clears the session; the next one is pointed at the handoff |
 | A long task remains | **Continue in a fresh session** | Clears the session and automatically asks the new one to continue from the handoff |
+| Only a little work is left | **Raise this session's limit** | Raises this session's thresholds just enough to finish without compacting |
 | | Compact now | Compacts as soon as the current turn ends |
 | | Review the handoff | Claude summarises it and asks what to change |
 | | Snooze | Raises this project's thresholds by 100k |
@@ -132,9 +133,14 @@ When there's a decision to make, the plugin shows a short list of options, with 
 
 | Option | What it does |
 |---|---|
+| **Use subagents for the reading** | Offered when the work is mostly reading: Claude goes ahead but sends the reading and searching to subagents, so only their findings enter this session |
 | **Raise this session's limit** | Raises this session's thresholds to fit the estimate (shown when it fits the model's window). Larger context costs more per turn. Ends with the session |
 | **Continue in a fresh session** | Saves a handoff if needed, clears the session and starts the new one on the work, with a clean context |
 | **Go ahead** | Starts anyway; compaction happens when it's needed |
+
+**When you reopen a big session** whose prompt cache has expired (after a break), your next message would re-send the whole context at full price. The plugin shows that cost and offers **Continue in a fresh session** (from the handoff), **Compact now**, or **Keep this session**.
+
+**Near your usage limits** (5-hour or weekly at 80% or more, set with `limit_pressure_at`), the option that uses less is recommended first, and the meter shows the limit.
 
 Options picked while Claude is working run as soon as the current turn ends. Turn the picker off with `offer_options: false`, or just the pre-flight check with `preflight_check: false`.
 
@@ -169,6 +175,13 @@ Or edit the settings files directly. Higher layers win:
 | `offer_on_startup` | `true` | Point new sessions at the latest handoff |
 | `offer_options` | `true` | Show the options picker after a handoff and when planned work may not fit |
 | `preflight_check` | `true` | Check planned work against the context budget before starting it |
+| `usage_aware` | `true` | Near a usage limit, recommend the option that uses less first; show the limit in the meter |
+| `limit_pressure_at` | `80` | Percent of a 5-hour or weekly limit at which `usage_aware` kicks in |
+| `stale_guard` | `true` | Offer a fresh start when a big resumed session's cache has expired |
+| `check_handoff_quality` | `true` | A handoff only counts once Goal, Current status and Next steps have content |
+| `check_updates` | `true` | Check GitHub at most twice a day and say when an update is out |
+| `track_stats` | `true` | Per-project stats in `/context-manager` |
+| `warn_large_reads` | `25000` | Notice when one tool result adds at least this many tokens (`0` = off) |
 | `handoff_dir` | `.claude/context-manager/handoffs` | Where handoffs are saved |
 
 Numbers can be written as `150000`, `"150k"` or `"1.2m"`. Changes apply from your next message. `/context-manager` shows the value in effect and where it came from.
@@ -177,7 +190,7 @@ Numbers can be written as `150000`, `"150k"` or `"1.2m"`. Changes apply from you
 
 | Command | What it does |
 |---|---|
-| `/context-manager` | Status: context size, handoff state, effective settings |
+| `/context-manager` | Status: context size, handoff state, usage limits, updates, project stats, effective settings |
 | `/context-manager options` | Show the options picker now |
 | `/context-manager run <option>` | Run an option by name (`auto`, `compact_now`, `finish_step`, `fresh_session`, `continue_fresh`, `expand`, `review`, `snooze`) |
 | `/context-manager-skill:plan-check` | Check whether upcoming work fits before compaction |

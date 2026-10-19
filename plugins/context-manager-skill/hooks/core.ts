@@ -17,6 +17,13 @@ export type Settings = {
   offer_on_startup: boolean
   offer_options: boolean
   preflight_check: boolean
+  usage_aware: boolean
+  limit_pressure_at: number
+  stale_guard: boolean
+  check_handoff_quality: boolean
+  check_updates: boolean
+  track_stats: boolean
+  warn_large_reads: number
   handoff_dir: string
 }
 
@@ -35,10 +42,20 @@ export const DEFAULTS: Settings = {
   offer_on_startup: true,
   offer_options: true,
   preflight_check: true,
+  usage_aware: true,
+  limit_pressure_at: 80,
+  stale_guard: true,
+  check_handoff_quality: true,
+  check_updates: true,
+  track_stats: true,
+  warn_large_reads: 25_000,
   handoff_dir: '.claude/context-manager/handoffs',
 }
 
 export const KEYS = Object.keys(DEFAULTS) as SettingKey[]
+
+/** Settings where 0 means "off". */
+const ZERO_OK = new Set<SettingKey>(['warn_large_reads'])
 
 /** Parses one setting: numbers accept 150000, "150k", "1.2m"; booleans accept true/false/yes/no/on/off/1/0. */
 export function parseSetting(key: SettingKey, raw: unknown): Settings[SettingKey] | undefined {
@@ -52,12 +69,17 @@ export function parseSetting(key: SettingKey, raw: unknown): Settings[SettingKey
     return undefined
   }
   if (typeof template === 'number') {
-    if (typeof raw === 'number') return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : undefined
+    if (typeof raw === 'number') {
+      if (!Number.isFinite(raw)) return undefined
+      if (key === 'limit_pressure_at') return raw > 0 && raw <= 100 ? Math.round(raw) : undefined
+      return raw > 0 || (raw === 0 && ZERO_OK.has(key)) ? Math.round(raw) : undefined
+    }
     const s = String(raw).replace(/[,_\s]/g, '').toLowerCase()
     const m = /^(\d+(?:\.\d+)?)([km]?)$/.exec(s)
     if (!m) return undefined
     const n = Number(m[1]) * (m[2] === 'k' ? 1_000 : m[2] === 'm' ? 1_000_000 : 1)
-    return n > 0 ? Math.round(n) : undefined
+    if (key === 'limit_pressure_at') return n > 0 && n <= 100 ? Math.round(n) : undefined
+    return n > 0 || (n === 0 && ZERO_OK.has(key)) ? Math.round(n) : undefined
   }
   const s = String(raw).trim()
   return s === '' ? undefined : s
@@ -121,7 +143,9 @@ export function formatK(n: number): string {
   return `${Math.round(n / 1000)}k`
 }
 
-export function formatValue(v: unknown): string {
+export function formatValue(v: unknown, key?: SettingKey): string {
+  if (key === 'limit_pressure_at') return `${v}%`
+  if (key === 'warn_large_reads' && v === 0) return 'off'
   return typeof v === 'number' ? formatK(v) : String(v)
 }
 
@@ -153,18 +177,54 @@ export function handoffFile(root: string, s: Settings, sessionId: string): strin
   return joinPath(handoffDir(root, s), `handoff-${sessionId}.md`)
 }
 
-export type HandoffState = 'missing' | 'started' | 'complete'
+export type HandoffState = 'missing' | 'started' | 'incomplete' | 'complete'
 
-export function handoffState(text: string | undefined): HandoffState {
-  if (text === undefined || text.trim() === '') return 'missing'
-  return text.includes(MARKER) ? 'complete' : 'started'
+/** The sections a handoff needs before it counts, each matched by its heading. */
+export const REQUIRED_SECTIONS: readonly { name: string; heading: RegExp }[] = [
+  { name: 'Goal', heading: /^#{1,4}\s*goal\b/i },
+  { name: 'Current status', heading: /^#{1,4}\s*(current\s+)?status\b/i },
+  { name: 'Next steps', heading: /^#{1,4}\s*next\s+steps?\b/i },
+]
+const PLACEHOLDER = /^(tbd|todo|n\/a|none|-|\.\.\.|…)$/i
+
+/** Required sections that are missing or empty. */
+export function handoffGaps(text: string): string[] {
+  const lines = text.split(/\r?\n/)
+  return REQUIRED_SECTIONS.filter(({ heading }) => {
+    const at = lines.findIndex(l => heading.test(l.trim()))
+    if (at < 0) return true
+    let hasContent = false
+    for (const l of lines.slice(at + 1)) {
+      const t = l.trim()
+      if (/^#{1,4}\s/.test(t) || t.includes(MARKER)) break
+      const words = t.replace(/^([-*]|\d+[.)])\s*/, '').trim() // drop a list marker
+      if (words !== '' && !PLACEHOLDER.test(words)) hasContent = true
+    }
+    return !hasContent
+  }).map(x => x.name)
 }
 
-export type Phase = 'unknown' | 'below-prep' | 'handoff-due' | 'ready-below-compact' | 'ready-to-compact'
+/** `strict` also requires the Goal, Current status and Next steps sections to have content. */
+export function handoffState(text: string | undefined, strict = false): HandoffState {
+  if (text === undefined || text.trim() === '') return 'missing'
+  if (!text.includes(MARKER)) return 'started'
+  return strict && handoffGaps(text).length > 0 ? 'incomplete' : 'complete'
+}
+
+export function gapsNote(path: string, gaps: string[]): string {
+  return (
+    `Context manager: the handoff at ${path} has its end marker but its ${gaps.join(', ')} ` +
+    `${gaps.length === 1 ? 'section is' : 'sections are'} missing or empty, so it doesn't count as saved yet. ` +
+    `Per the user's context-manager workflow, fill ${gaps.length === 1 ? 'it' : 'them'} in now (keep ${MARKER} as the last line).`
+  )
+}
+
+export type Phase = 'unknown' | 'below-prep' | 'handoff-due' | 'handoff-incomplete' | 'ready-below-compact' | 'ready-to-compact'
 
 export function phaseOf(tokens: number | undefined, state: HandoffState, s: Settings): Phase {
   if (tokens === undefined) return 'unknown'
   if (tokens < s.prep_at) return 'below-prep'
+  if (state === 'incomplete') return 'handoff-incomplete'
   if (state !== 'complete') return 'handoff-due'
   return tokens < s.compact_at ? 'ready-below-compact' : 'ready-to-compact'
 }
@@ -241,7 +301,27 @@ export function archiveName(sessionId: string, now: Date): string {
   return `handoff-${sessionId}.used-${stamp}.md`
 }
 
-export function meterText(tokens: number | undefined, window: number | undefined, phase: Phase, s: Settings): string {
+export type RateLimit = { kind: string; percentUsed: number; resetsAt?: string }
+export type Pressure = { label: string; percent: number; isHigh: boolean }
+
+export function limitLabel(kind: string): string {
+  return kind === 'seven_day' ? 'weekly' : kind === 'five_hour' ? '5-hour' : kind.replace(/_/g, ' ')
+}
+
+/** The most-used rate-limit window, and whether it is past the user's pressure point. */
+export function pressureOf(limits: readonly RateLimit[] | undefined, s: Settings): Pressure | undefined {
+  if (!s.usage_aware || !limits || limits.length === 0) return undefined
+  const top = [...limits].sort((a, b) => b.percentUsed - a.percentUsed)[0]
+  if (!top) return undefined
+  return { label: limitLabel(top.kind), percent: Math.round(top.percentUsed), isHigh: top.percentUsed >= s.limit_pressure_at }
+}
+
+export function meterText(tokens: number | undefined, window: number | undefined, phase: Phase, s: Settings, pressure?: Pressure): string {
+  const usage = pressure && pressure.percent >= 50 ? ` · ${pressure.label} ${pressure.percent}%` : ''
+  return meterBody(tokens, window, phase, s) + (tokens === undefined ? '' : usage)
+}
+
+function meterBody(tokens: number | undefined, window: number | undefined, phase: Phase, s: Settings): string {
   if (tokens === undefined) return 'Context: waiting for the first reply'
   const pct = window ? ` (${Math.round((tokens / window) * 100)}%)` : ''
   const head = `Context ${formatK(tokens)}${window ? ` / ${formatK(window)}` : ''}${pct}`
@@ -250,6 +330,8 @@ export function meterText(tokens: number | undefined, window: number | undefined
       return `${head} · handoff at ${formatK(s.prep_at)}, compact at ${formatK(s.compact_at)}`
     case 'handoff-due':
       return `${head} · handoff due now`
+    case 'handoff-incomplete':
+      return `${head} · handoff needs its missing sections`
     case 'ready-below-compact':
       return `${head} · handoff saved · compact at ${formatK(s.compact_at)}`
     case 'ready-to-compact':
@@ -262,14 +344,14 @@ export function meterText(tokens: number | undefined, window: number | undefined
 // ---------- options picker ----------
 
 /** What Claude judged about the work when it offers options. */
-export type Situation = 'mid_task' | 'near_done' | 'delicate_step' | 'topic_switch' | 'preflight_overflow'
-export const SITUATIONS: readonly Situation[] = ['mid_task', 'near_done', 'delicate_step', 'topic_switch', 'preflight_overflow']
+export type Situation = 'mid_task' | 'near_done' | 'delicate_step' | 'topic_switch' | 'preflight_overflow' | 'stale_resume'
+export const SITUATIONS: readonly Situation[] = ['mid_task', 'near_done', 'delicate_step', 'topic_switch', 'preflight_overflow', 'stale_resume']
 
 /** Everything the picker can run. */
-export type ActionId = 'auto' | 'compact_now' | 'finish_step' | 'fresh_session' | 'continue_fresh' | 'expand' | 'review' | 'snooze'
-export const ACTION_IDS: readonly ActionId[] = ['auto', 'compact_now', 'finish_step', 'fresh_session', 'continue_fresh', 'expand', 'review', 'snooze']
+export type ActionId = 'auto' | 'compact_now' | 'finish_step' | 'fresh_session' | 'continue_fresh' | 'expand' | 'delegate' | 'review' | 'snooze'
+export const ACTION_IDS: readonly ActionId[] = ['auto', 'compact_now', 'finish_step', 'fresh_session', 'continue_fresh', 'expand', 'delegate', 'review', 'snooze']
 
-export type OfferKind = 'handoff' | 'preflight'
+export type OfferKind = 'handoff' | 'preflight' | 'resume'
 
 export type Offer = {
   kind: OfferKind
@@ -278,6 +360,7 @@ export type Offer = {
   actions: ActionId[] // recommended first
   estimate?: number
   expandTo?: number // the compact_at "expand" would set for this session
+  resendTokens?: number // resume: what the next message re-sends uncached
   createdAt: number
 }
 
@@ -285,8 +368,11 @@ export const SNOOZE_STEP = 100_000
 const EXPAND_HEADROOM = 1.15
 const EXPAND_CAP = 0.85 // never plan to fill more than 85% of the window
 
-const HANDOFF_ACTIONS: ActionId[] = ['auto', 'compact_now', 'finish_step', 'fresh_session', 'continue_fresh', 'review', 'snooze']
-const PREFLIGHT_ACTIONS: ActionId[] = ['expand', 'continue_fresh', 'auto']
+const HANDOFF_ACTIONS: ActionId[] = ['auto', 'expand', 'compact_now', 'finish_step', 'fresh_session', 'continue_fresh', 'review', 'snooze']
+const PREFLIGHT_ACTIONS: ActionId[] = ['delegate', 'expand', 'continue_fresh', 'auto']
+const RESUME_ACTIONS: ActionId[] = ['continue_fresh', 'compact_now', 'auto']
+/** Remaining work this small (or less) finishes better with a bigger limit than with a compaction. */
+const EXPAND_FOR_REMAINING = 120_000
 
 const DEFAULT_RECOMMENDATION: Record<Situation, ActionId> = {
   mid_task: 'auto',
@@ -294,7 +380,11 @@ const DEFAULT_RECOMMENDATION: Record<Situation, ActionId> = {
   delicate_step: 'finish_step',
   topic_switch: 'fresh_session',
   preflight_overflow: 'expand',
+  stale_resume: 'continue_fresh',
 }
+
+/** Under rate-limit pressure: what to recommend instead of an option that spends more. */
+const UNDER_PRESSURE: Partial<Record<ActionId, ActionId>> = { expand: 'continue_fresh', auto: 'compact_now' }
 
 /** The compact_at that would fit `estimate` more tokens from `tokens`, rounded up to 10k; undefined when it can't fit. */
 export function expandTarget(tokens: number, estimate: number, window: number, s: Settings): number | undefined {
@@ -323,32 +413,62 @@ export function buildOffer(args: {
   situation: Situation
   recommended?: ActionId
   reason?: string
-  estimate?: number
+  estimate?: number // preflight: the planned work; handoff: the work remaining
+  readHeavy?: boolean // preflight: most of the estimate is reading or searching
   tokens?: number
   window: number
   s: Settings
   now: number
+  pressure?: Pressure
+  resendTokens?: number
 }): Offer {
-  const { kind, situation, s, window, now } = args
-  let actions = [...(kind === 'preflight' ? PREFLIGHT_ACTIONS : HANDOFF_ACTIONS)]
+  const { kind, situation, s, window, now, pressure } = args
+  let actions = [...(kind === 'preflight' ? PREFLIGHT_ACTIONS : kind === 'resume' ? RESUME_ACTIONS : HANDOFF_ACTIONS)]
   let expandTo: number | undefined
-  if (kind === 'preflight') {
+  if (kind !== 'resume') {
     expandTo = args.tokens !== undefined && args.estimate !== undefined ? expandTarget(args.tokens, args.estimate, window, s) : undefined
     if (expandTo === undefined) actions = actions.filter(a => a !== 'expand')
   }
-  let first: ActionId = args.recommended && actions.includes(args.recommended) ? args.recommended : DEFAULT_RECOMMENDATION[situation]
+  if (!args.readHeavy) actions = actions.filter(a => a !== 'delegate')
+
+  // What to recommend: Claude's pick, else the situation's default, refined by the remaining work and usage.
+  let first: ActionId | undefined = args.recommended && actions.includes(args.recommended) ? args.recommended : undefined
+  if (!first) {
+    first = DEFAULT_RECOMMENDATION[situation]
+    if (kind === 'preflight' && args.readHeavy) first = 'delegate'
+    if (
+      kind === 'handoff' && expandTo !== undefined && args.estimate !== undefined && args.estimate <= EXPAND_FOR_REMAINING &&
+      (situation === 'mid_task' || situation === 'delicate_step')
+    ) {
+      first = 'expand'
+    }
+  }
+  let note = ''
+  if (pressure?.isHigh) {
+    const cheaper = UNDER_PRESSURE[first]
+    if (cheaper && actions.includes(cheaper)) {
+      first = cheaper
+      note = ` Your ${pressure.label} limit is ${pressure.percent}% used, so the option that uses less comes first.`
+    }
+  }
   if (!actions.includes(first)) first = actions[0] ?? 'auto'
   actions = [first, ...actions.filter(a => a !== first)]
-  const reason =
-    args.reason?.trim() ||
-    (kind === 'preflight' ? 'The planned work may not fit before compaction.' : 'A handoff is saved.')
-  return { kind, situation, reason: reason.slice(0, 160), actions, estimate: args.estimate, expandTo, createdAt: now }
+  const fallback =
+    kind === 'preflight'
+      ? 'The planned work may not fit before compaction.'
+      : kind === 'resume'
+        ? 'This session was idle and its cache has expired.'
+        : 'A handoff is saved.'
+  const reason = ((args.reason?.trim() || fallback).slice(0, 200) + note).trim()
+  return { kind, situation, reason, actions, estimate: args.estimate, expandTo, resendTokens: args.resendTokens, createdAt: now }
 }
 
 export function actionLabel(a: ActionId, offer: Offer | undefined, s: Settings): string {
   switch (a) {
     case 'auto':
-      return offer?.kind === 'preflight' ? `Go ahead; compact at ${formatK(s.compact_at)} if needed` : `Keep going; compact at ${formatK(s.compact_at)}`
+      if (offer?.kind === 'preflight') return `Go ahead; compact at ${formatK(s.compact_at)} if needed`
+      if (offer?.kind === 'resume') return offer.resendTokens ? `Keep this session (re-sends ~${formatK(offer.resendTokens)})` : 'Keep this session'
+      return `Keep going; compact at ${formatK(s.compact_at)}`
     case 'compact_now':
       return 'Compact now'
     case 'finish_step':
@@ -359,6 +479,8 @@ export function actionLabel(a: ActionId, offer: Offer | undefined, s: Settings):
       return 'Continue in a fresh session'
     case 'expand':
       return offer?.expandTo ? `Raise this session's limit to ${formatK(offer.expandTo)}` : "Raise this session's limit"
+    case 'delegate':
+      return 'Use subagents for the reading'
     case 'review':
       return 'Review the handoff'
     case 'snooze':
@@ -372,7 +494,8 @@ export const ACTION_HELP: Record<ActionId, string> = {
   finish_step: 'Claude finishes the current step, updates the handoff, then the plugin compacts',
   fresh_session: 'the task is done or the topic changes: clear the session; the next one is pointed at the handoff',
   continue_fresh: 'save the handoff, clear the session, and automatically ask the new one to continue from it',
-  expand: "raise only this session's thresholds so the planned work fits (larger context costs more per turn)",
+  expand: "raise only this session's thresholds so the work fits (larger context costs more per turn)",
+  delegate: 'go ahead, but send the file reading and searching to subagents so only their findings enter this context',
   review: 'Claude summarises the handoff and asks what to change',
   snooze: "raise this project's thresholds by 100k",
 }
@@ -390,7 +513,8 @@ export function preflightNote(tokens: number, s: Settings, toolName: string): st
     `${formatK(s.compact_at)}, leaving about ${formatK(room)} of room. Per the user's context-manager workflow, ` +
     `before starting the tasks just planned, estimate how many tokens of context they will add (file reads, edits, ` +
     `tool output). If they are likely to exceed the room, call ${toolName} with action "offer", kind "preflight", ` +
-    `situation "preflight_overflow", estimate_tokens and a one-sentence reason, and follow its result before starting. ` +
+    `situation "preflight_overflow", estimate_tokens, read_heavy (true when most of the estimate is reading or ` +
+    `searching files, which subagents could do instead) and a one-sentence reason, and follow its result before starting. ` +
     `If they fit, carry on without mentioning this.`
   )
 }
@@ -404,4 +528,96 @@ export function continuePrompt(path: string): string {
 
 export function snoozed(s: Settings): Partial<Settings> {
   return { prep_at: s.prep_at + SNOOZE_STEP, compact_at: s.compact_at + SNOOZE_STEP, force_at: s.force_at + SNOOZE_STEP }
+}
+
+// ---------- stale-session guard (feature 3) ----------
+
+/** Whether a resumed session should be offered a fresh start: cache expired and enough context to matter. */
+export function isStaleResume(e: { source?: string; prompt_cache_likely_expired?: boolean; context_tokens?: number }, s: Settings): boolean {
+  if (!s.enabled || !s.stale_guard) return false
+  if (e.source !== 'resume' && e.source !== 'fork') return false
+  return e.prompt_cache_likely_expired === true && (e.context_tokens ?? 0) >= Math.min(s.prep_at, 100_000)
+}
+
+export function staleReason(e: { seconds_since_last_response?: number; context_tokens?: number; estimated_cache_write_usd?: number }): string {
+  const idle = e.seconds_since_last_response
+  const away = idle === undefined ? 'was idle' : idle >= 5400 ? `was idle ${Math.round(idle / 3600)} h` : `was idle ${Math.max(1, Math.round(idle / 60))} min`
+  const cost = e.estimated_cache_write_usd !== undefined ? ` (about $${e.estimated_cache_write_usd.toFixed(2)})` : ''
+  return `This session ${away} and its cache has expired: your next message re-sends ~${formatK(e.context_tokens ?? 0)} tokens at full price${cost}.`
+}
+
+export function staleNote(reason: string, toolName: string): string {
+  return (
+    `Context manager: ${reason} Per the user's context-manager workflow, before anything else call ${toolName} ` +
+    `with action "offer", kind "resume", so the user can choose to continue in a fresh session from a handoff instead.`
+  )
+}
+
+// ---------- delegate (feature 5) ----------
+
+export const DELEGATE_PROMPT =
+  'Go ahead with the planned tasks, but send the file reading and searching to subagents (for example the Explore agent) ' +
+  'and keep only their findings and the edits in this conversation.'
+
+// ---------- update notice (feature 6) ----------
+
+/** Compares dotted versions: >0 when a is newer than b. Non-numeric parts compare as 0. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[.+-]/).map(n => parseInt(n, 10) || 0)
+  const pb = b.split(/[.+-]/).map(n => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length, 3); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+
+/** The raw plugin.json URL on GitHub for a repository URL, or undefined for any other host. */
+export function rawManifestUrl(repository: string | undefined, pluginDir: string): string | undefined {
+  const m = repository ? /^https:\/\/github\.com\/([^/]+)\/([^/#?]+?)(?:\.git)?\/?$/.exec(repository) : null
+  return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/main/${pluginDir}/.claude-plugin/plugin.json` : undefined
+}
+
+export const UPDATE_CHECK_EVERY_MS = 12 * 60 * 60 * 1000
+
+export function updateNotice(latest: string, current: string, marketplace: string): string {
+  return (
+    `Claude Context Manager Skill ${latest} is available (you have ${current}). Update: /plugin marketplace update ` +
+    `${marketplace}, then + > Plugins > Manage plugins > Update (or claude plugin update in a terminal).`
+  )
+}
+
+// ---------- stats (feature 7) ----------
+
+export type Stats = {
+  sessions: number
+  compactions: number
+  trimmed: number // tokens removed from context by compactions
+  peak: number // largest context seen
+  handoffs: number
+  freshContinues: number
+  expands: number
+  largeReads: number
+  since: number
+}
+
+export function emptyStats(now: number): Stats {
+  return { sessions: 0, compactions: 0, trimmed: 0, peak: 0, handoffs: 0, freshContinues: 0, expands: 0, largeReads: 0, since: now }
+}
+
+export function statsLines(st: Stats): string[] {
+  const since = new Date(st.since).toISOString().slice(0, 10)
+  return [
+    `  Sessions        ${st.sessions} since ${since}; largest context ${formatK(st.peak)}`,
+    `  Handoffs        ${st.handoffs} saved; ${st.compactions} compactions trimmed ${formatK(st.trimmed)} of context`,
+    `  Picker          ${st.freshContinues} continued fresh; ${st.expands} limits raised`,
+    `  Large reads     ${st.largeReads} warned`,
+  ]
+}
+
+// ---------- large-read warning (feature 8) ----------
+
+/** Rough tokens in a tool's result text (about 4 characters per token). */
+export function estimateTokens(text: string | undefined): number {
+  return text ? Math.ceil(text.length / 4) : 0
 }

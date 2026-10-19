@@ -8,7 +8,7 @@ const ROOT = '/work/proj'
 const HOME = '/home/craig'
 const SID = 'sess-1'
 const HANDOFF = `${ROOT}/.claude/context-manager/handoffs/handoff-${SID}.md`
-const DONE = `# Compaction handoff\n## Goal\nShip it\n${MARKER}\n`
+const DONE = `# Compaction handoff\n## Goal\nShip it\n## Current status\nTests pass\n## Next steps\n1. Release\n${MARKER}\n`
 
 type World = {
   clock: ReturnType<typeof mock.clock>
@@ -20,10 +20,21 @@ type World = {
   filled: string[]
   commands: string[]
   prompts: string[]
+  fetches: string[]
+  limits: { kind: string; percentUsed: number }[]
 }
 
 /** The engine beneath the plugin: an in-memory project, a context size the test sets, and core's compaction. */
-function world(on: On, opts: { tokens?: number; files?: Record<string, string>; surfaces?: readonly ('terminal' | 'desktop' | 'vscode' | 'mobile')[] } = {}): World {
+function world(
+  on: On,
+  opts: {
+    tokens?: number
+    files?: Record<string, string>
+    surfaces?: readonly ('terminal' | 'desktop' | 'vscode' | 'mobile')[]
+    limits?: { kind: string; percentUsed: number }[]
+    remoteVersion?: string
+  } = {},
+): World {
   const files = new Map(Object.entries(opts.files ?? {}))
   const tokens = { value: opts.tokens }
   const compactions: string[] = []
@@ -32,6 +43,8 @@ function world(on: On, opts: { tokens?: number; files?: Record<string, string>; 
   const filled: string[] = []
   const commands: string[] = []
   const prompts: string[] = []
+  const fetches: string[] = []
+  const limits = [...(opts.limits ?? [])]
   mock.store(on)
   mock.env(on, { HOME })
   const clock = mock.clock(on, { now: Date.parse('2026-10-19T14:00:00Z') })
@@ -43,11 +56,14 @@ function world(on: On, opts: { tokens?: number; files?: Record<string, string>; 
     value: {
       startedAt: 0,
       context: { tokens: tokens.value, window: 1_000_000, percent: tokens.value === undefined ? undefined : Math.round(tokens.value / 10_000) },
-      rateLimits: [],
+      rateLimits: limits,
     },
   }))
-  on('fs.exists', ($, e) => ({ value: files.has(e.path) || [...files.keys()].some(k => k.startsWith(`${e.path}/`)) }))
+  const MANIFEST = JSON.stringify({ version: '2.2.0', repository: 'https://github.com/llnet-inc-tools/claude-context-manager-skill' })
+  const isManifest = (path: string) => path.endsWith('/.claude-plugin/plugin.json') && !files.has(path)
+  on('fs.exists', ($, e) => ({ value: isManifest(e.path) || files.has(e.path) || [...files.keys()].some(k => k.startsWith(`${e.path}/`)) }))
   on('fs.read', ($, e) => {
+    if (isManifest(e.path)) return { value: MANIFEST }
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
@@ -69,6 +85,7 @@ function world(on: On, opts: { tokens?: number; files?: Record<string, string>; 
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('classic.SessionStart', () => ({}))
   on('session.surfaces', () => ({ value: opts.surfaces ?? (['terminal'] as const) }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__context-manager-skill__${e.name}` } }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
@@ -82,6 +99,10 @@ function world(on: On, opts: { tokens?: number; files?: Record<string, string>; 
     return { text: '' }
   })
   on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  on('http.fetch', ($, e) => {
+    fetches.push(e.url)
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ version: opts.remoteVersion ?? '0.0.1' }) } }
+  })
   on('session.compact', ($, e) => {
     compactions.push(e.trigger)
     return { messages: [{ role: 'user', text: 'summary', toolUses: [] }], tokensBefore: tokens.value, tokensAfter: 20_000 }
@@ -91,7 +112,7 @@ function world(on: On, opts: { tokens?: number; files?: Record<string, string>; 
     seen.context = [...(e.context ?? [])]
     return { text: e.text, context: e.context }
   })
-  return { files, tokens, compactions, seen, toasts, clock, filled, commands, prompts }
+  return { files, tokens, compactions, seen, toasts, clock, filled, commands, prompts, fetches, limits }
 }
 
 /** Submits a prompt as the person would and returns the context blocks the model was given. */
@@ -460,5 +481,209 @@ describe('actions', () => {
     const out = await $.command.run({ command: 'context-manager', args: 'run snooze', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as never)
     expect((out as { text?: string }).text).toContain('compaction at 250k')
     expect(w.files.get(`${ROOT}/.claude/context-manager.json`)).toContain('"prep_at": 230000')
+  })
+})
+
+// ---------- v2.2 ----------
+
+const STATUS = { command: 'context-manager', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 140 } }
+async function status($: Engine): Promise<string> {
+  return ((await $.command.run(STATUS as never)) as { text?: string }).text ?? ''
+}
+const BAND = { plugin: 'context-manager-skill', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10 } }
+
+describe('1. raise the limit from the handoff picker', () => {
+  test('recommends raising the limit when the rest of the task is small', async ($, on) => {
+    world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    const text = await callTool($, { action: 'offer', kind: 'handoff', situation: 'mid_task', estimate_tokens: 40_000 })
+    expect(text).toMatch(/1\. Raise this session's limit to 190k \(recommended\)/)
+  })
+
+  test('keeps the default when a lot of work remains, but still offers it', async ($, on) => {
+    world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    const text = await callTool($, { action: 'offer', kind: 'handoff', situation: 'mid_task', estimate_tokens: 300_000 })
+    expect(text).toMatch(/1\. Keep going/)
+    expect(text).toContain("Raise this session's limit to 490k")
+  })
+
+  test('does not offer it without an estimate', async ($, on) => {
+    world(on, { tokens: 140_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    expect(await callTool($, { action: 'offer', kind: 'handoff', situation: 'mid_task' })).not.toContain('Raise this session')
+  })
+})
+
+describe('2. usage-aware recommendations', () => {
+  test('near a limit, the cheaper option comes first and the reason says why', async ($, on) => {
+    world(on, { tokens: 120_000, limits: [{ kind: 'five_hour', percentUsed: 40 }, { kind: 'seven_day', percentUsed: 86 }] })
+    await startSession($)
+    const text = await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 100_000 })
+    expect(text).toMatch(/1\. Continue in a fresh session \(recommended\)/)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as never)
+    expect(await ui.find({ type: 'Text', text: /weekly limit is 86% used/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /· weekly 86%/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('with headroom, nothing changes and the meter stays quiet', async ($, on) => {
+    world(on, { tokens: 120_000, limits: [{ kind: 'seven_day', percentUsed: 30 }] })
+    await startSession($)
+    expect(await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 100_000 })).toMatch(/1\. Raise/)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as never)
+    expect(await ui.find({ type: 'Text', text: /weekly/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('can be turned off', { options: { usage_aware: false } }, async ($, on) => {
+    world(on, { tokens: 120_000, limits: [{ kind: 'seven_day', percentUsed: 95 }] })
+    await startSession($)
+    expect(await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 100_000 })).toMatch(/1\. Raise/)
+  })
+})
+
+describe('3. stale-session guard', () => {
+  const RESUME = { source: 'resume', prompt_cache_likely_expired: true, context_tokens: 400_000, seconds_since_last_response: 7200, estimated_cache_write_usd: 2.5 }
+
+  test('a resumed session with an expired cache gets a fresh-start offer as buttons', async ($, on) => {
+    const w = world(on, { tokens: 400_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    await $.classic.SessionStart(RESUME as never)
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' } as never)
+    expect(await ui.find({ type: 'Text', text: /idle 2 h .* ~400k tokens at full price \(about \$2\.50\)/ })).toBeDefined()
+    expect(await ui.find({ key: 'opt-continue_fresh' })).toBeDefined()
+    await ui.press({ key: 'opt-continue_fresh' })
+    await w.clock.advance(1000)
+    expect(w.commands).toEqual(['clear'])
+    await ui.unmount()
+  })
+
+  test('typing a message instead keeps the session and drops the offer', async ($, on) => {
+    const w = world(on, { tokens: 400_000 })
+    await startSession($)
+    await $.classic.SessionStart(RESUME as never)
+    await submit($, w, 'carry on')
+    expect(w.seen.context.some(c => c.includes('cache has expired'))).toBe(false)
+    expect(await status($)).not.toContain('Options')
+  })
+
+  test('without buttons (VS Code), the first message asks Claude to offer it', async ($, on) => {
+    const w = world(on, { tokens: 400_000, surfaces: ['vscode'] })
+    await startSession($)
+    await $.classic.SessionStart(RESUME as never)
+    const context = await submit($, w, 'carry on')
+    expect(context.some(c => c.includes('kind "resume"'))).toBe(true)
+    expect(await callTool($, { action: 'offer', kind: 'resume' })).toContain('AskUserQuestion')
+  })
+
+  test('no offer when the cache is warm or the session is small', async ($, on) => {
+    world(on, { tokens: 400_000 })
+    await startSession($)
+    await $.classic.SessionStart({ ...RESUME, prompt_cache_likely_expired: false } as never)
+    await $.classic.SessionStart({ ...RESUME, context_tokens: 30_000 } as never)
+    expect(await status($)).not.toContain('Options')
+  })
+})
+
+describe('4. handoff quality check', () => {
+  const THIN = `# Compaction handoff\n## Goal\nShip it\n## Current status\nTBD\n${MARKER}\n`
+
+  test('a handoff with empty or missing sections does not count, and Claude is told what to fill', async ($, on) => {
+    const w = world(on, { tokens: 160_000, files: { [HANDOFF]: THIN } })
+    await startSession($)
+    const context = await submit($, w)
+    expect(context[0]).toContain('Current status, Next steps sections are missing or empty')
+    const r = (await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as never)) as { skip?: string }
+    expect(r.skip).toContain('handoff')
+    expect(await status($)).toContain('missing Current status, Next steps')
+  })
+
+  test('can be turned off', { options: { check_handoff_quality: false } }, async ($, on) => {
+    world(on, { tokens: 160_000, files: { [HANDOFF]: THIN } })
+    await startSession($)
+    const r = (await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as never)) as { skip?: string }
+    expect(r.skip).toBeUndefined()
+  })
+})
+
+describe('5. delegate heavy reading', () => {
+  test('read-heavy planned work recommends subagents first', async ($, on) => {
+    world(on, { tokens: 120_000 })
+    await startSession($)
+    const text = await callTool($, { action: 'offer', kind: 'preflight', situation: 'preflight_overflow', estimate_tokens: 150_000, read_heavy: true })
+    expect(text).toMatch(/1\. Use subagents for the reading \(recommended\)/)
+    expect(await callTool($, { action: 'run', option: 'delegate' })).toContain('subagents')
+  })
+
+  test('the pre-flight note asks Claude whether the work is read-heavy', async ($, on) => {
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'x' } } } as never))
+    world(on, { tokens: 120_000 })
+    await startSession($)
+    await startTurn($)
+    const r = (await $.tool.call({ tool: 'TaskCreate', tool_use_id: 'a', subject: 'x', description: 'y' } as never)) as { context?: string[] }
+    expect(r.context?.[0]).toContain('read_heavy')
+  })
+})
+
+describe('6. update notice', () => {
+  test('says when a newer version is out, and checks GitHub at most twice a day', async ($, on) => {
+    const w = world(on, { tokens: 10_000, remoteVersion: '9.9.9' })
+    await startSession($)
+    await w.clock.advance(4000)
+    expect(w.fetches[0]).toBe('https://raw.githubusercontent.com/llnet-inc-tools/claude-context-manager-skill/main/plugins/context-manager-skill/.claude-plugin/plugin.json')
+    expect(w.toasts.some(t => t.includes('9.9.9 is available'))).toBe(true)
+    expect(await status($)).toContain('Update    9.9.9 is available')
+    await startSession($)
+    await w.clock.advance(4000)
+    expect(w.fetches).toHaveLength(1) // the cached answer is reused
+  })
+
+  test('stays quiet when up to date', async ($, on) => {
+    const w = world(on, { tokens: 10_000, remoteVersion: '0.0.1' })
+    await startSession($)
+    await w.clock.advance(4000)
+    expect(w.toasts.some(t => t.includes('is available'))).toBe(false)
+  })
+
+  test('can be turned off', { options: { check_updates: false } }, async ($, on) => {
+    const w = world(on, { tokens: 10_000, remoteVersion: '9.9.9' })
+    await startSession($)
+    await w.clock.advance(4000)
+    expect(w.fetches).toEqual([])
+  })
+})
+
+describe('7. project stats', () => {
+  test('counts sessions, handoffs and compactions per project', async ($, on) => {
+    const w = world(on, { tokens: 160_000, files: { [HANDOFF]: DONE } })
+    await startSession($)
+    await startTurn($)
+    await endTurn($) // sees the saved handoff, then compacts on its own
+    await w.clock.advance(2000)
+    const text = await status($)
+    expect(text).toContain('This project')
+    expect(text).toMatch(/Sessions\s+1 since/)
+    expect(text).toContain('largest context 160k')
+    expect(text).toMatch(/Handoffs\s+1 saved; 1 compactions trimmed 140k of context/)
+  })
+})
+
+describe('8. large tool results', () => {
+  test('warns when one result adds a lot of context', async ($, on) => {
+    on('tool.call', { tool: 'Read' }, () => ({ result: {}, text: 'x'.repeat(120_000) } as never))
+    const w = world(on, { tokens: 50_000 })
+    await startSession($)
+    await $.tool.call({ tool: 'Read', tool_use_id: 'r1', file_path: '/work/proj/big.json' } as never)
+    expect(w.toasts.some(t => t.includes('Read just added ~30k tokens'))).toBe(true)
+    expect(await status($)).toMatch(/Large reads\s+1 warned/)
+  })
+
+  test('stays quiet for normal results, and when turned off', { options: { warn_large_reads: 0 } }, async ($, on) => {
+    on('tool.call', { tool: 'Read' }, () => ({ result: {}, text: 'x'.repeat(200_000) } as never))
+    const w = world(on, { tokens: 50_000 })
+    await startSession($)
+    await $.tool.call({ tool: 'Read', tool_use_id: 'r1', file_path: '/work/proj/big.json' } as never)
+    expect(w.toasts.some(t => t.includes('just added'))).toBe(false)
   })
 })

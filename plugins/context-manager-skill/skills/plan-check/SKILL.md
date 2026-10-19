@@ -18,7 +18,8 @@ description: Before starting a large or multi-step piece of work (several files 
 
    Round up. Allow about 20% for surprises.
 3. **If it fits**, start the work without mentioning the check.
-4. **If it won't fit**, call the context manager's tool (`mcp__context-manager-skill__context_manager`) with `action: "offer"`, `kind: "preflight"`, `situation: "preflight_overflow"`, `estimate_tokens` (your estimate) and a one-sentence `reason` (for example "Refactoring 12 services needs about 220k; 30k is left."). Follow its result, and **don't start the work until the user has chosen**:
+4. **If it won't fit**, call the context manager's tool (`mcp__context-manager-skill__context_manager`) with `action: "offer"`, `kind: "preflight"`, `situation: "preflight_overflow"`, `estimate_tokens` (your estimate), `read_heavy` (true when most of the estimate is reading or searching files) and a one-sentence `reason` (for example "Refactoring 12 services needs about 220k; 30k is left."). Follow its result, and **don't start the work until the user has chosen**:
+   - **Use subagents for the reading** (offered when `read_heavy`): go ahead, but send the file reading and searching to subagents such as the Explore agent, keeping only their findings and the edits here. Often the work then fits without any other change.
    - **Raise this session's limit:** the work fits the model's window; this session's thresholds go up, and you then go ahead.
    - **Continue in a fresh session:** a handoff is saved, the session is cleared, and the new session is asked to continue from the handoff.
    - **Go ahead:** start anyway; compaction happens when needed.

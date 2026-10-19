@@ -43,7 +43,7 @@ Gotchas discovered the hard way: commands that hang, flaky tests, approaches alr
 <!-- handoff-complete -->
 ```
 
-The last line must be exactly `<!-- handoff-complete -->`, written only once everything else is in the file. Compaction is held until that line is present. The `/context-manager` command shows whether the handoff counts as saved.
+The last line must be exactly `<!-- handoff-complete -->`, written only once everything else is in the file. Compaction is held until that line is present **and** the Goal, Current status and Next steps sections have real content (not "TBD"). The `/context-manager` command shows whether the handoff counts as saved.
 
 ## After writing: offer the user the right next step
 
@@ -55,6 +55,8 @@ Judge where the work stands, then call the context manager's tool (named in the 
 | `near_done` | The task is about finished, or the user is wrapping up | `fresh_session` |
 | `delicate_step` | You are partway through a risky step (a migration, a large refactor, a half-applied change) | `finish_step` |
 | `topic_switch` | The user is moving to something unrelated | `fresh_session` |
+
+When the current task isn't finished, also pass `estimate_tokens`: roughly how much context the rest of it will add (see the cost table in the `plan-check` skill). If the rest is small, the plugin offers to raise this session's limit so the task can finish without a compaction.
 
 Pass `recommended` only when you disagree with the default for that situation, for example `continue_fresh` when a long task remains and a clean context would serve it better than a compacted one.
 

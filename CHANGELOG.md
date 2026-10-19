@@ -2,6 +2,19 @@
 
 All notable changes to Claude Context Manager Skill. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-10-19
+
+### Added
+- **Raise the limit for unfinished work.** The handoff picker now offers *Raise this session's limit* sized to the work left, and recommends it when the rest of the task is small, so organic growth (a debugging session that keeps going) gets the same expand-only-when-needed treatment as planned work.
+- **Usage-aware recommendations.** The plugin reads your 5-hour and weekly limits. Past `limit_pressure_at` (80%), the option that uses less comes first and the picker says why; the meter shows the fuller limit once it passes 50%.
+- **Stale-session guard.** Reopening a large session whose prompt cache has expired re-sends everything at full price; the plugin now catches that on resume and offers *Continue in a fresh session* first, with the cost.
+- **Handoff quality check.** A handoff only counts as saved once its Goal, Current status and Next steps sections have real content; otherwise Claude is told exactly what to fill in.
+- **Use subagents for the reading.** When planned work is mostly reading, the pre-flight picker recommends sending that to subagents so it never enters the main context.
+- **Update notice.** Checks GitHub at most twice a day; a toast and `/context-manager` say when a newer version is available and how to update.
+- **Project stats** in `/context-manager`: sessions, largest context, handoffs, compactions and context trimmed, picker use, large reads.
+- **Large-read warning.** A notice when one tool result adds 25k+ tokens of context.
+- Settings `usage_aware`, `limit_pressure_at`, `stale_guard`, `check_handoff_quality`, `check_updates`, `track_stats`, `warn_large_reads` (also plugin options).
+
 ## [2.1.0] - 2026-10-19
 
 ### Added
@@ -42,6 +55,7 @@ All notable changes to Claude Context Manager Skill. The format follows [Keep a 
 ### Added
 - First release: handoff before compaction, compaction gate, post-compaction restore, startup pointer, layered settings (Windows, PowerShell).
 
+[2.2.0]: https://github.com/llnet-inc-tools/claude-context-manager-skill/releases/tag/context-manager-skill--v2.2.0
 [2.1.0]: https://github.com/llnet-inc-tools/claude-context-manager-skill/releases/tag/context-manager-skill--v2.1.0
 [2.0.0]: https://github.com/llnet-inc-tools/claude-context-manager-skill/releases/tag/context-manager-skill--v2.0.0
 [1.1.0]: https://github.com/llnet-inc-tools/claude-context-manager-skill/commit/fb0cde5
